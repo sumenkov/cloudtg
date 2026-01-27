@@ -1,8 +1,9 @@
 use std::{
   ffi::{CStr, CString},
+  io::{BufRead, BufReader},
   os::raw::{c_char, c_double, c_int, c_void},
   path::{Path, PathBuf},
-  process::Command,
+  process::{Command, Stdio},
   sync::mpsc,
   time::Duration
 };
@@ -156,6 +157,7 @@ impl TdlibTelegram {
               &mut lib_path,
               &mut client,
               &mut waiting_for_params,
+              &mut build_attempted,
               &mut pending,
               &app_for_thread,
               &mut last_state
@@ -173,6 +175,7 @@ impl TdlibTelegram {
             &mut lib_path,
             &mut client,
             &mut waiting_for_params,
+            &mut build_attempted,
             &mut pending,
             &app_for_thread,
             &mut last_state
@@ -182,7 +185,7 @@ impl TdlibTelegram {
         if client.is_none() {
           if config.is_some() && lib_path.is_none() && !build_attempted {
             build_attempted = true;
-            match attempt_tdlib_build(&paths_for_thread) {
+            match attempt_tdlib_build(&paths_for_thread, &app_for_thread) {
               Ok(p) => {
                 lib_path = Some(p);
               }
@@ -297,6 +300,7 @@ fn handle_command(
   lib_path: &mut Option<PathBuf>,
   client: &mut Option<TdlibClient>,
   waiting_for_params: &mut bool,
+  build_attempted: &mut bool,
   pending: &mut Vec<String>,
   app: &tauri::AppHandle,
   last_state: &mut Option<AuthState>
@@ -321,6 +325,7 @@ fn handle_command(
       }
 
       *lib_path = resolve_tdlib_path(paths, tdlib_path.as_deref());
+      *build_attempted = false;
 
       if client.is_some() && *waiting_for_params {
         if let Some(cfg) = config.as_ref() {
@@ -339,32 +344,56 @@ fn handle_command(
   }
 }
 
-fn attempt_tdlib_build(paths: &Paths) -> anyhow::Result<PathBuf> {
+fn attempt_tdlib_build(paths: &Paths, app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
+  emit_build(app, "start", "Начинаю сборку TDLib", None);
   let base = tdlib_reserved_dir(paths);
   std::fs::create_dir_all(&base)?;
 
   let repo_dir = base.join("td");
   if !repo_dir.exists() {
+    emit_build(app, "clone", "Клонирую репозиторий TDLib", None);
     let mut cmd = Command::new("git");
     cmd.arg("clone")
       .arg("--depth")
       .arg("1")
       .arg("https://github.com/tdlib/td.git")
       .arg(&repo_dir);
-    run_command(cmd, "git clone")?;
+    if let Err(e) = run_command(cmd, "git clone", app) {
+      emit_build(app, "error", "Не удалось скачать TDLib", Some(e.to_string()));
+      return Err(e);
+    }
   }
 
   let build_dir = repo_dir.join("build");
   std::fs::create_dir_all(&build_dir)?;
 
-  if !build_dir.join("CMakeCache.txt").exists() {
+  let mut need_configure = !build_dir.join("CMakeCache.txt").exists();
+  if !build_system_ready(&build_dir) {
+    need_configure = true;
+  }
+
+  if need_configure {
+    emit_build(app, "configure", "Готовлю сборку (cmake)", None);
+    if build_dir.exists() {
+      let _ = std::fs::remove_dir_all(&build_dir);
+    }
+    std::fs::create_dir_all(&build_dir)?;
     let mut cmd = Command::new("cmake");
     cmd.arg("-DCMAKE_BUILD_TYPE=Release")
       .arg("..")
       .current_dir(&build_dir);
-    run_command(cmd, "cmake configure")?;
+    if let Err(e) = run_command(cmd, "cmake configure", app) {
+      emit_build(app, "error", "Ошибка конфигурации CMake", Some(e.to_string()));
+      return Err(e);
+    }
+    if !build_system_ready(&build_dir) {
+      let msg = "CMake не создал файлы сборки (Makefile/Ninja)";
+      emit_build(app, "error", msg, Some(msg.to_string()));
+      return Err(anyhow::anyhow!(msg));
+    }
   }
 
+  emit_build(app, "build", "Собираю TDLib", None);
   let mut build_cmd = Command::new("cmake");
   build_cmd.arg("--build").arg(".").arg("--target").arg("tdjson");
   #[cfg(target_os = "windows")]
@@ -373,21 +402,77 @@ fn attempt_tdlib_build(paths: &Paths) -> anyhow::Result<PathBuf> {
   }
   build_cmd.current_dir(&build_dir);
 
-  run_command(build_cmd, "cmake build")?;
+  if let Err(e) = run_command(build_cmd, "cmake build", app) {
+    emit_build(app, "error", "Ошибка сборки TDLib", Some(e.to_string()));
+    return Err(e);
+  }
 
-  find_tdjson_lib(&repo_dir).ok_or_else(|| anyhow::anyhow!("Сборка прошла, но libtdjson не найден"))
+  if let Some(p) = find_tdjson_lib(&repo_dir) {
+    emit_build(app, "success", "TDLib собран", Some(p.to_string_lossy().to_string()));
+    Ok(p)
+  } else {
+    let msg = "Сборка прошла, но libtdjson не найден";
+    emit_build(app, "error", msg, Some(msg.to_string()));
+    Err(anyhow::anyhow!(msg))
+  }
 }
 
-fn run_command(mut cmd: Command, name: &str) -> anyhow::Result<()> {
-  let out = cmd.output()?;
-  if !out.status.success() {
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+fn run_command(mut cmd: Command, name: &str, app: &tauri::AppHandle) -> anyhow::Result<()> {
+  cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+  let mut child = cmd.spawn()?;
+
+  let stdout = child.stdout.take();
+  let stderr = child.stderr.take();
+
+  let (tx, rx) = mpsc::channel::<(String, String)>();
+
+  if let Some(out) = stdout {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+      let reader = BufReader::new(out);
+      for line in reader.lines().flatten() {
+        let _ = tx.send(("stdout".to_string(), line));
+      }
+    });
+  }
+
+  if let Some(err) = stderr {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+      let reader = BufReader::new(err);
+      for line in reader.lines().flatten() {
+        let _ = tx.send(("stderr".to_string(), line));
+      }
+    });
+  }
+
+  drop(tx);
+
+  let mut stdout_buf = String::new();
+  let mut stderr_buf = String::new();
+
+  for (stream, line) in rx {
+    emit_build_log(app, &stream, &line);
+    if stream == "stdout" {
+      stdout_buf.push_str(&line);
+      stdout_buf.push('\n');
+    } else {
+      stderr_buf.push_str(&line);
+      stderr_buf.push('\n');
+    }
+  }
+
+  let status = child.wait()?;
+  if !status.success() {
     return Err(anyhow::anyhow!(
-      "{name} завершился с ошибкой. stdout: {stdout} stderr: {stderr}"
+      "{name} завершился с ошибкой. stdout: {stdout_buf} stderr: {stderr_buf}"
     ));
   }
   Ok(())
+}
+
+fn build_system_ready(build_dir: &Path) -> bool {
+  build_dir.join("Makefile").exists() || build_dir.join("build.ninja").exists()
 }
 
 fn tdlib_reserved_dir(paths: &Paths) -> PathBuf {
@@ -414,10 +499,10 @@ fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
   ];
 
   while let Some(dir) = stack.pop() {
-  let entries = match std::fs::read_dir(&dir) {
-    Ok(v) => v,
-    Err(_) => continue
-  };
+    let entries = match std::fs::read_dir(&dir) {
+      Ok(v) => v,
+      Err(_) => continue
+    };
     for e in entries.flatten() {
       let path = e.path();
       if path.is_dir() {
@@ -573,6 +658,13 @@ struct AuthEvent {
   state: String
 }
 
+#[derive(Clone, serde::Serialize)]
+struct BuildEvent {
+  state: String,
+  message: String,
+  detail: Option<String>
+}
+
 fn auth_state_to_str(state: &AuthState) -> &'static str {
   match state {
     AuthState::Unknown => "unknown",
@@ -583,6 +675,29 @@ fn auth_state_to_str(state: &AuthState) -> &'static str {
     AuthState::Ready => "ready",
     AuthState::Closed => "closed"
   }
+}
+
+fn emit_build(app: &tauri::AppHandle, state: &str, message: &str, detail: Option<String>) {
+  let payload = BuildEvent {
+    state: state.to_string(),
+    message: message.to_string(),
+    detail
+  };
+  let _ = app.emit("tdlib_build_status", payload);
+}
+
+fn emit_build_log(app: &tauri::AppHandle, stream: &str, line: &str) {
+  let payload = BuildLogEvent {
+    stream: stream.to_string(),
+    line: line.to_string()
+  };
+  let _ = app.emit("tdlib_build_log", payload);
+}
+
+#[derive(Clone, serde::Serialize)]
+struct BuildLogEvent {
+  stream: String,
+  line: String
 }
 
 fn build_tdlib_parameters(config: &TdlibConfig) -> String {

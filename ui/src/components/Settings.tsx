@@ -9,11 +9,17 @@ type TgSettingsView = {
 };
 
 export function Settings({ onClose }: { onClose?: () => void }) {
-  const { setError, refreshAuth } = useAppStore();
+  const { setError, refreshAuth, refreshSettings, tdlibBuild, tdlibLogs } = useAppStore();
   const [apiId, setApiId] = useState("");
   const [apiHash, setApiHash] = useState("");
   const [tdlibPath, setTdlibPath] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const buildState = tdlibBuild.state;
+  const isBuilding = buildState === "start" || buildState === "clone" || buildState === "configure" || buildState === "build";
+  const isError = buildState === "error";
+  const isSuccess = buildState === "success";
+  const showGperfHint = tdlibBuild.detail?.toLowerCase().includes("gperf");
 
   useEffect(() => {
     (async () => {
@@ -75,26 +81,35 @@ export function Settings({ onClose }: { onClose?: () => void }) {
         <button
           onClick={async () => {
             try {
+              setSaving(true);
+              setStatus("Сохраняю...");
               const id = parseInt(apiId.trim(), 10);
               if (!Number.isFinite(id) || id <= 0) {
                 setStatus("API_ID должен быть положительным числом");
+                setSaving(false);
                 return;
               }
               if (!apiHash.trim()) {
                 setStatus("API_HASH не может быть пустым");
+                setSaving(false);
                 return;
               }
               await invokeSafe("settings_set_tg", {
-                api_id: id,
-                api_hash: apiHash.trim(),
-                tdlib_path: tdlibPath.trim() ? tdlibPath.trim() : null
+                apiId: id,
+                apiHash: apiHash.trim(),
+                tdlibPath: tdlibPath.trim() ? tdlibPath.trim() : null
               });
+              await refreshSettings();
               await refreshAuth();
               setStatus("Сохранено. Можно продолжить авторизацию.");
             } catch (e: any) {
+              setStatus("Не удалось сохранить настройки");
               setError(String(e));
+            } finally {
+              setSaving(false);
             }
           }}
+          disabled={saving}
           style={{ padding: 10, borderRadius: 10 }}
         >
           Сохранить
@@ -109,6 +124,48 @@ export function Settings({ onClose }: { onClose?: () => void }) {
       {status ? (
         <div style={{ padding: 10, borderRadius: 8, background: "#f6f6f6" }}>
           {status}
+        </div>
+      ) : null}
+
+      {tdlibBuild.state ? (
+        <div
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            border: isError ? "1px solid #f99" : "1px solid #ddd",
+            background: isError ? "#fee" : "#fafafa"
+          }}
+        >
+          <b>Сборка TDLib</b>
+          <div style={{ marginTop: 6 }}>{tdlibBuild.message}</div>
+          {isBuilding ? (
+            <div style={{ marginTop: 8, height: 8, background: "#e5e5e5", borderRadius: 999 }}>
+              <div style={{ width: "60%", height: "100%", background: "#4a90e2", borderRadius: 999 }} />
+            </div>
+          ) : null}
+          {isSuccess && tdlibBuild.detail ? (
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+              Файл: {tdlibBuild.detail}
+            </div>
+          ) : null}
+          {isError && tdlibBuild.detail ? (
+            <pre style={{ marginTop: 8, whiteSpace: "pre-wrap", fontSize: 12 }}>{tdlibBuild.detail}</pre>
+          ) : null}
+          {isError && showGperfHint ? (
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              Подсказка: установи пакет <b>gperf</b> и запусти сборку снова.
+            </div>
+          ) : null}
+          {isError ? (
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+              Чтобы повторить сборку, снова нажми «Сохранить».
+            </div>
+          ) : null}
+          {tdlibLogs.length ? (
+            <pre style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 220, overflow: "auto" }}>
+              {tdlibLogs.map((l, i) => `[${l.stream}] ${l.line}`).join("\n")}
+            </pre>
+          ) : null}
         </div>
       ) : null}
     </div>

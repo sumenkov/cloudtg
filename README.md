@@ -14,6 +14,24 @@
 > Если путь к TDLib не указан и библиотека не найдена, приложение попробует скачать и собрать TDLib в `./third_party/tdlib`.
 > Для автосборки нужны `git`, `cmake` и C/C++ toolchain, установленные в системе.
 
+### Быстрая установка зависимостей для автосборки TDLib
+- Ubuntu/Debian:
+  ```bash
+  sudo apt-get install git cmake gperf build-essential
+  ```
+- Arch:
+  ```bash
+  sudo pacman -S git cmake gperf base-devel
+  ```
+- macOS (Homebrew):
+  ```bash
+  brew install git cmake gperf
+  ```
+- Windows (MSYS2):
+  ```powershell
+  pacman -S mingw-w64-x86_64-gperf mingw-w64-x86_64-cmake git
+  ```
+
 ## Быстрый старт (dev)
 
 ### 1) Установи зависимости

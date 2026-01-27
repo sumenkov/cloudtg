@@ -3,13 +3,20 @@ import { invokeSafe } from "../tauri";
 import { useAppStore } from "../store/app";
 
 export function Login() {
-  const { auth, setError, refreshAuth } = useAppStore();
+  const { auth, setError, refreshAuth, tdlibBuild, tgSettings } = useAppStore();
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
 
   const phase = auth === "wait_password" ? "password" : auth === "wait_code" ? "code" : "phone";
   const disabled = auth === "wait_config";
+  const buildError = tdlibBuild.state === "error";
+  const buildInProgress =
+    tdlibBuild.state === "start" ||
+    tdlibBuild.state === "clone" ||
+    tdlibBuild.state === "configure" ||
+    tdlibBuild.state === "build";
+  const hasSettings = Boolean(tgSettings.api_id && tgSettings.api_hash);
 
   return (
     <div style={{ display: "grid", gap: 10, maxWidth: 520 }}>
@@ -21,7 +28,15 @@ export function Login() {
       </div>
       {auth === "wait_config" ? (
         <div style={{ padding: 12, border: "1px solid #f99", borderRadius: 10, background: "#fee" }}>
-          Сначала заполни API_ID и API_HASH в настройках.
+          {buildInProgress ? (
+            <div>Идет сборка TDLib. Подробности смотри в настройках.</div>
+          ) : buildError ? (
+            <div>Сборка TDLib завершилась ошибкой. Открой настройки.</div>
+          ) : hasSettings ? (
+            <div>Настройки сохранены. Ожидаю запуск TDLib, проверь статус в настройках.</div>
+          ) : (
+            <div>Сначала заполни API_ID и API_HASH в настройках.</div>
+          )}
         </div>
       ) : null}
 

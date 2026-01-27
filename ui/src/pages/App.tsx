@@ -6,48 +6,91 @@ import { Login } from "../components/Login";
 import { Settings } from "../components/Settings";
 
 export default function App() {
-  const { auth, setAuth, tree, refreshTree, error, setError, refreshAuth } = useAppStore();
+  const {
+    auth,
+    setAuth,
+    tree,
+    refreshTree,
+    error,
+    setError,
+    refreshAuth,
+    refreshSettings,
+    setTdlibBuild,
+    clearTdlibLogs,
+    pushTdlibLog
+  } = useAppStore();
+    useAppStore();
   const [showSettings, setShowSettings] = useState(false);
+  const [autoShowSettings, setAutoShowSettings] = useState(true);
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    const unlisteners: Array<() => void> = [];
 
     (async () => {
       try {
         const state = await refreshAuth();
+        await refreshSettings();
         if (state === "ready") {
           await refreshTree();
         }
 
-        unlisten = await listenSafe<{ state: string }>("auth_state_changed", async (event) => {
-          setAuth(event.payload.state);
-          if (event.payload.state === "ready") {
-            await refreshTree();
-          }
-        });
+        unlisteners.push(
+          await listenSafe<{ state: string }>("auth_state_changed", async (event) => {
+            setAuth(event.payload.state);
+            if (event.payload.state === "ready") {
+              await refreshTree();
+            }
+          })
+        );
+
+        unlisteners.push(
+          await listenSafe<{ state: string; message: string; detail?: string | null }>("tdlib_build_status", async (event) => {
+            if (event.payload.state === "start") {
+              clearTdlibLogs();
+            }
+            setTdlibBuild({
+              state: event.payload.state ?? null,
+              message: event.payload.message ?? null,
+              detail: event.payload.detail ?? null
+            });
+          })
+        );
+
+        unlisteners.push(
+          await listenSafe<{ stream: "stdout" | "stderr"; line: string }>("tdlib_build_log", async (event) => {
+            pushTdlibLog(event.payload.stream, event.payload.line);
+          })
+        );
       } catch (e: any) {
         setError(String(e));
       }
     })();
 
     return () => {
-      if (unlisten) {
-        unlisten();
-      }
+      unlisteners.forEach((fn) => fn());
     };
-  }, [refreshAuth, refreshTree, setAuth, setError]);
+  }, [refreshAuth, refreshSettings, refreshTree, setAuth, setError, setTdlibBuild, clearTdlibLogs, pushTdlibLog]);
 
   useEffect(() => {
-    if (auth === "wait_config") {
+    if (auth === "wait_config" && autoShowSettings) {
       setShowSettings(true);
     }
-  }, [auth]);
+    if (auth === "ready") {
+      setAutoShowSettings(true);
+    }
+  }, [auth, autoShowSettings]);
 
   return (
     <div style={{ fontFamily: "system-ui, sans-serif", padding: 16, maxWidth: 1100, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ marginBottom: 6 }}>CloudTG</h1>
-        <button onClick={() => setShowSettings((v) => !v)} style={{ padding: "8px 12px", borderRadius: 10 }}>
+        <button
+          onClick={() => {
+            setShowSettings((v) => !v);
+            setAutoShowSettings(false);
+          }}
+          style={{ padding: "8px 12px", borderRadius: 10 }}
+        >
           Настройки
         </button>
       </div>
@@ -62,7 +105,12 @@ export default function App() {
       ) : null}
 
       {showSettings ? (
-        <Settings onClose={() => setShowSettings(false)} />
+        <Settings
+          onClose={() => {
+            setShowSettings(false);
+            setAutoShowSettings(false);
+          }}
+        />
       ) : auth !== "ready" ? (
         <Login />
       ) : (

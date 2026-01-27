@@ -112,5 +112,6 @@ pub async fn settings_set_tg(
 
   let tg = state.telegram().map_err(map_err)?;
   tg.configure(api_id, api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
+  state.set_auth_state(AuthState::Unknown);
   Ok(())
 }
