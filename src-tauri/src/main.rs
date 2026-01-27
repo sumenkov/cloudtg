@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use tauri::Manager;
 use cloudtg_lib::state::AppState;
 use cloudtg_lib::commands;
 

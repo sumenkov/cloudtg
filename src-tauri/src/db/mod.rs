@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use sqlx::migrate::Migrator;
 
-static MIGRATOR: Migrator = sqlx::migrate!("migrations");
+// NOTE: use the default migrations directory resolution (CARGO_MANIFEST_DIR/migrations)
+// to avoid the "paths relative to the current file's directory are not currently supported" error.
+static MIGRATOR: Migrator = sqlx::migrate!();
 
 #[derive(Clone)]
 pub struct Db {

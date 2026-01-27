@@ -10,13 +10,21 @@
   },
   "app": {
     "windows": [
-      { "title": "CloudTG", "width": 1100, "height": 760 }
+      {
+        "title": "CloudTG",
+        "width": 1100,
+        "height": 760
+      }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [ "icons/icon.png" ]
+    "icon": [
+      "icons/icon.png"
+    ]
   }
 }

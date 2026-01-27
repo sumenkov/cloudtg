@@ -65,7 +65,9 @@ pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
 
   for it in &items {
     if let Some(pid) = &it.parent_id {
-      if let (Some(parent), Some(child)) = (map.get_mut(pid), map.get(&it.id).cloned()) {
+      // Avoid simultaneous mutable+immutable borrows of the same map.
+      let child = map.get(&it.id).cloned();
+      if let (Some(parent), Some(child)) = (map.get_mut(pid), child) {
         parent.children.push(child);
       }
     } else {
