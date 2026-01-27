@@ -112,7 +112,7 @@ export default function App() {
         Файлы в Telegram, структура в SQLite. Авторизация через TDLib.
       </p>
 
-      {tdlibBuild.state ? (
+      {tdlibBuild.state && tdlibBuild.state !== "success" ? (
         <div
           style={{
             marginBottom: 12,

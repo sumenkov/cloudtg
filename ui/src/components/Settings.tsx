@@ -127,7 +127,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
         </div>
       ) : null}
 
-      {tdlibBuild.state ? (
+      {tdlibBuild.state && tdlibBuild.state !== "success" ? (
         <div
           style={{
             padding: 12,

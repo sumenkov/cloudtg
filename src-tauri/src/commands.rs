@@ -1,8 +1,10 @@
 use tauri::State;
+use std::path::{Path, PathBuf};
 
 use crate::state::{AppState, AuthState};
 use crate::app::{dirs, sync};
 use crate::settings;
+use crate::paths::Paths;
 use tracing::info;
 
 #[derive(serde::Serialize)]
@@ -87,7 +89,13 @@ pub async fn dir_list_tree(state: State<'_, AppState>) -> Result<crate::app::mod
 pub async fn settings_get_tg(state: State<'_, AppState>) -> Result<settings::TgSettingsView, String> {
   info!(event = "settings_get_tg", "Чтение настроек Telegram");
   let db = state.db().map_err(map_err)?;
-  settings::get_tg_settings_view(db.pool()).await.map_err(map_err)
+  let mut view = settings::get_tg_settings_view(db.pool()).await.map_err(map_err)?;
+  if let Ok(paths) = state.paths() {
+    if let Some(p) = resolve_tdlib_path_effective(&paths, view.tdlib_path.as_deref()) {
+      view.tdlib_path = Some(p.to_string_lossy().to_string());
+    }
+  }
+  Ok(view)
 }
 
 #[tauri::command]
@@ -138,4 +146,88 @@ fn mask_phone(phone: &str) -> String {
   }
   let tail = &p[p.len() - 4..];
   format!("***{tail}")
+}
+
+fn resolve_tdlib_path_effective(paths: &Paths, configured: Option<&str>) -> Option<PathBuf> {
+  if let Some(p) = configured {
+    let path = PathBuf::from(p);
+    if path.exists() {
+      return Some(path);
+    }
+  }
+
+  if let Ok(p) = std::env::var("CLOUDTG_TDLIB_PATH") {
+    let path = PathBuf::from(p);
+    if path.exists() {
+      return Some(path);
+    }
+  }
+
+  let base = &paths.base_dir;
+
+  #[cfg(target_os = "windows")]
+  let candidates = [base.join("tdjson.dll")];
+
+  #[cfg(target_os = "macos")]
+  let candidates = [base.join("libtdjson.dylib")];
+
+  #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+  let candidates = [base.join("libtdjson.so"), base.join("libtdjson.so.1")];
+
+  for c in candidates {
+    if c.exists() {
+      return Some(c);
+    }
+  }
+
+  let repo_dir = tdlib_reserved_dir(paths).join("td");
+  if repo_dir.exists() {
+    if let Some(p) = find_tdjson_lib(&repo_dir) {
+      return Some(p);
+    }
+  }
+
+  None
+}
+
+fn tdlib_reserved_dir(paths: &Paths) -> PathBuf {
+  let base = paths.base_dir.join("third_party").join("tdlib");
+  if base.exists() {
+    return base;
+  }
+  if let Ok(cwd) = std::env::current_dir() {
+    let alt = cwd.join("third_party").join("tdlib");
+    if alt.exists() {
+      return alt;
+    }
+  }
+  base
+}
+
+fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
+  let mut stack = vec![root.to_path_buf()];
+  let names = [
+    "libtdjson.so",
+    "libtdjson.so.1",
+    "libtdjson.dylib",
+    "tdjson.dll"
+  ];
+
+  while let Some(dir) = stack.pop() {
+    let entries = match std::fs::read_dir(&dir) {
+      Ok(v) => v,
+      Err(_) => continue
+    };
+    for e in entries.flatten() {
+      let path = e.path();
+      if path.is_dir() {
+        stack.push(path);
+      } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if names.iter().any(|n| n == &name) {
+          return Some(path);
+        }
+      }
+    }
+  }
+  None
 }
