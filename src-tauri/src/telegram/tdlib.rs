@@ -49,17 +49,20 @@ struct TdlibClient {
   set_log_verbosity: Option<unsafe extern "C" fn(c_int)>
 }
 
+// Безопасно, пока клиент используется только в одном потоке.
+unsafe impl Send for TdlibClient {}
+
 impl TdlibClient {
   fn load(path: &Path) -> anyhow::Result<Self> {
     unsafe {
       let lib = Library::new(path)?;
-      let create: libloading::Symbol<unsafe extern "C" fn() -> *mut c_void> = lib.get(b"td_json_client_create")?;
-      let send: libloading::Symbol<unsafe extern "C" fn(*mut c_void, *const c_char)> = lib.get(b"td_json_client_send")?;
-      let receive: libloading::Symbol<unsafe extern "C" fn(*mut c_void, c_double) -> *const c_char> = lib.get(b"td_json_client_receive")?;
-      let execute: libloading::Symbol<unsafe extern "C" fn(*mut c_void, *const c_char) -> *const c_char> = lib.get(b"td_json_client_execute")?;
-      let destroy: libloading::Symbol<unsafe extern "C" fn(*mut c_void)> = lib.get(b"td_json_client_destroy")?;
+      let create = *lib.get::<unsafe extern "C" fn() -> *mut c_void>(b"td_json_client_create")?;
+      let send = *lib.get::<unsafe extern "C" fn(*mut c_void, *const c_char)>(b"td_json_client_send")?;
+      let receive = *lib.get::<unsafe extern "C" fn(*mut c_void, c_double) -> *const c_char>(b"td_json_client_receive")?;
+      let execute = *lib.get::<unsafe extern "C" fn(*mut c_void, *const c_char) -> *const c_char>(b"td_json_client_execute")?;
+      let destroy = *lib.get::<unsafe extern "C" fn(*mut c_void)>(b"td_json_client_destroy")?;
 
-      let set_log_verbosity = lib.get::<unsafe extern "C" fn(c_int)>(b"td_set_log_verbosity_level").ok();
+      let set_log_verbosity = lib.get::<unsafe extern "C" fn(c_int)>(b"td_set_log_verbosity_level").ok().map(|f| *f);
 
       let client = create();
       if client.is_null() {
@@ -69,11 +72,11 @@ impl TdlibClient {
       Ok(Self {
         _lib: lib,
         client,
-        send: *send,
-        receive: *receive,
-        execute: *execute,
-        destroy: *destroy,
-        set_log_verbosity: set_log_verbosity.map(|f| *f)
+        send,
+        receive,
+        execute,
+        destroy,
+        set_log_verbosity
       })
     }
   }
@@ -347,7 +350,7 @@ fn set_auth_state(app: &tauri::AppHandle, state: AuthState, last_state: &mut Opt
   *last_state = Some(state.clone());
 
   let payload = AuthEvent { state: auth_state_to_str(&state).to_string() };
-  let _ = app.emit_all("auth_state_changed", payload);
+  let _ = app.emit("auth_state_changed", payload);
 }
 
 #[derive(serde::Serialize)]
