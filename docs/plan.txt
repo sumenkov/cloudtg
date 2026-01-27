@@ -1,0 +1,163 @@
+ПЛАН РАЗРАБОТКИ: CloudTG (Tauri + Rust + React/Vue)
+Дата: 2026-01-26
+
+0) Контракты (фиксируем решения)
+- Цель MVP: файловый менеджер + Telegram-хранилище (upload/list/download) с восстановлением структуры из Telegram и локальной БД.
+- Telegram API: TDLib (MTProto)
+- Локальная БД: SQLite
+- Метаданные в Telegram: caption-теги + служебные текстовые сообщения для директорий
+- Хранение в Telegram: приватный канал “CloudVault” (рекомендуется) для реальных share-ссылок
+- Портативность: всё рядом с бинарем: ./data, ./cache, ./logs
+
+1) Архитектура проекта
+1.1 Репозиторий (скелет)
+cloudtg/
+  src-tauri/                 # Rust backend (Tauri)
+    src/
+      main.rs
+      app/                   # бизнес-логика
+      telegram/              # tdlib wrapper + sync
+      db/                    # sqlite + migrations
+      fsmeta/                # теги/парсер/форматы
+    tauri.conf.json
+  ui/                        # React/Vue frontend
+    src/
+      pages/
+      components/
+      store/
+  third_party/
+    tdlib/                   # сборка/бинари tdlib (скрипты)
+  data/                      # runtime (создается при запуске)
+  cache/
+  logs/
+
+1.2 Слои
+- telegram/: авторизация, отправка/поиск/скачивание, подписка на updates
+- fsmeta/: формат тегов, парсинг caption, генерация служебных сообщений
+- db/: директории/файлы/состояние синка
+- app/: команды “создать папку”, “загрузить файл”, “импортировать”, “получить дерево”, “поиск”
+- ui/: файловый менеджер и экраны настроек
+
+2) Модель данных (SQLite)
+Таблицы:
+- directories(id TEXT PK, parent_id TEXT, name TEXT, tg_msg_id INTEGER NULL, updated_at INTEGER)
+- files(id TEXT PK, dir_id TEXT, name TEXT, size INTEGER, hash TEXT, tg_chat_id INTEGER, tg_msg_id INTEGER, created_at INTEGER)
+- sync_state(key TEXT PK, value TEXT)
+  (пример ключей: last_update_seq, last_scanned_msg_id, storage_chat_id)
+
+ID:
+- ULID (сортируется по времени, короткий, удобный)
+
+3) Формат тегов и служебных сообщений (восстановление без локальной БД)
+3.1 Файл (caption к документу)
+Пример:
+#ocltg #v1 #file d=01H... f=01H... n=report.pdf h=1a2b3c4d
+- d = dirId, f = fileId
+- h = короткий хэш (первые 8–12 hex)
+- n = имя файла (как есть или нормализованное)
+
+3.2 Директория (текстовое сообщение)
+#ocltg #v1 #dir d=01H... p=ROOT name=Projects
+
+4) Telegram-часть (TDLib) как сервис
+4.1 Задачи
+- Обвязка libtdjson (FFI) в Rust: init, send/receive, json (serde)
+- Авторизация (phone, code, 2FA)
+- Выбор storage:
+  - создать/найти приватный канал CloudVault
+  - сохранить storage_chat_id в sqlite
+
+4.2 Операции (минимальный API backend↔UI)
+- auth_start() / auth_submit_code() / auth_submit_password()
+- storage_get_or_create_channel()
+- dir_create(parentId, name) -> запись в БД + отправка #dir сообщения
+- dir_list_tree()
+- file_upload(dirId, path) -> отправка документа с caption-тегами, запись tg_chat_id/tg_msg_id
+- file_list(dirId)
+- file_download(fileId, targetPath?) (по умолчанию ./cache/downloads)
+- file_copy_share_link(fileId):
+  - если storage канал: строим message link
+  - если Избранное: опционально “скопировать в Share-канал и дать ссылку”
+
+4.3 Синк
+- Подписка на updates от TDLib
+- Инкрементальный индексатор:
+  - новые сообщения с #ocltg парсим и обновляем БД
+  - хранить курсор в sync_state
+- Периодический reconcile (на случай пропуска): скан последних N сообщений
+
+5) Tauri-интеграция
+- Backend как “демон” внутри приложения:
+  - отдельный поток/таск для TDLib receive-loop
+  - события в UI через tauri::event::emit:
+    - auth_state_changed
+    - sync_progress
+    - upload_progress(fileId, percent)
+    - download_progress(fileId, percent)
+    - tree_updated, dir_updated, file_updated
+
+6) UI-план (React или Vue)
+Экраны:
+1) Авторизация: phone → code → (опц.) 2FA, индикатор состояния TDLib
+2) Файловый менеджер:
+   - слева дерево директорий
+   - сверху breadcrumbs + поиск
+   - справа список файлов (виртуализированный)
+   - контекстное меню:
+     папка: создать/переименовать/удалить/переместить
+     файл: скачать / копировать ссылку / показать в Telegram / удалить из индекса
+3) Импорт:
+   - список документов без #ocltg
+   - выбор папки назначения
+   - действие: копирование в storage с корректным caption
+4) Настройки:
+   - storage: CloudVault vs Избранное
+   - пути данных (портативный режим)
+   - опция шифрования (позже)
+
+Состояние вместо Riverpod:
+- React: Zustand или Redux Toolkit
+- Vue: Pinia
+
+7) Портативность и упаковка
+Пути:
+- base_dir = папка с бинарем
+- base_dir/data (sqlite + tdlib db)
+- base_dir/cache
+- base_dir/logs
+
+Сборки:
+- Windows: zip (exe + tdlib dll + папки)
+- Linux: AppImage или tar.gz portable
+- macOS: .app + папка data рядом (учесть quarantine/подписи)
+
+8) Роадмап по версиям
+v0.1 MVP:
+- TDLib login
+- выбор/создание CloudVault
+- дерево директорий (create/list)
+- upload + list файлов по папке
+- download on-demand
+
+v0.2:
+- импорт чужих файлов (Inbox → копирование в storage с тегами)
+- “копировать ссылку” (для канала) + открыть сообщение в Telegram
+
+v0.3:
+- updates listener + индексатор
+- поиск по имени/хэшу/типу
+- устойчивость к дублям/переименованиям
+
+v1.0:
+- кэш превью/иконки
+- массовые операции
+- шифрование (опционально)
+- бэкап/восстановление из Telegram
+
+9) Первый спринт (конкретные шаги)
+1) Инициализировать Tauri проект + UI (React/Vue)
+2) Подключить SQLite + миграции
+3) Поднять TDLib в Rust: send/receive + auth flow
+4) Команды Tauri: auth_*, storage_get_or_create_channel
+5) Черновой UI авторизации + экран “Connected”
+6) Реализовать: dir_create, dir_tree, file_upload

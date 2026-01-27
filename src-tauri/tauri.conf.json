@@ -1,0 +1,22 @@
+{
+  "productName": "CloudTG",
+  "version": "0.1.0",
+  "identifier": "com.cloudtg.app",
+  "build": {
+    "beforeDevCommand": "npm --workspace ui run dev",
+    "beforeBuildCommand": "npm --workspace ui run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      { "title": "CloudTG", "width": 1100, "height": 760 }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [ "icons/icon.png" ]
+  }
+}

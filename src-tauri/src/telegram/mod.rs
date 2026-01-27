@@ -1,0 +1,66 @@
+use std::sync::Arc;
+
+use crate::paths::Paths;
+
+pub type ChatId = i64;
+pub type MessageId = i64;
+
+#[derive(Debug, Clone)]
+pub struct UploadedMessage {
+  pub chat_id: ChatId,
+  pub message_id: MessageId,
+  pub caption_or_text: String
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum TgError {
+  #[error("not implemented")]
+  NotImplemented,
+  #[error("auth required")]
+  AuthRequired,
+  #[error("io error: {0}")]
+  Io(#[from] std::io::Error),
+  #[error("{0}")]
+  Other(String)
+}
+
+#[async_trait::async_trait]
+pub trait TelegramService: Send + Sync {
+  async fn auth_start(&self, phone: String) -> Result<(), TgError>;
+  async fn auth_submit_code(&self, code: String) -> Result<(), TgError>;
+  async fn auth_submit_password(&self, password: String) -> Result<(), TgError>;
+
+  async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError>;
+
+  async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
+  async fn send_file(&self, chat_id: ChatId, path: std::path::PathBuf, caption: String) -> Result<UploadedMessage, TgError>;
+
+  async fn download_message_file(&self, chat_id: ChatId, message_id: MessageId, target: std::path::PathBuf) -> Result<std::path::PathBuf, TgError>;
+}
+
+#[cfg(feature = "mock_telegram")]
+mod mock;
+#[cfg(feature = "mock_telegram")]
+pub use mock::MockTelegram;
+
+#[cfg(feature = "tdlib")]
+mod tdlib;
+
+pub fn make_telegram_service(paths: Paths, app: tauri::AppHandle) -> anyhow::Result<Arc<dyn TelegramService>> {
+  #[cfg(feature = "mock_telegram")]
+  {
+    return Ok(Arc::new(MockTelegram::new(paths, app)));
+  }
+
+  #[cfg(all(not(feature = "mock_telegram"), feature = "tdlib"))]
+  {
+    return Ok(Arc::new(tdlib::TdlibTelegram::new(paths, app)?));
+  }
+
+  #[cfg(all(not(feature = "mock_telegram"), not(feature = "tdlib")))]
+  {
+    Err(anyhow::anyhow!(
+      "No telegram backend selected. Enable 'mock_telegram' or 'tdlib' feature."
+    ))
+  }
+}

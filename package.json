@@ -1,0 +1,13 @@
+{
+  "name": "cloudtg",
+  "private": true,
+  "workspaces": ["ui"],
+  "scripts": {
+    "dev": "npm --workspace ui run dev",
+    "build": "npm --workspace ui run build",
+    "test": "npm --workspace ui run test",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.conf.json",
+    "tauri:build": "tauri build --config src-tauri/tauri.conf.json",
+    "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml"
+  }
+}

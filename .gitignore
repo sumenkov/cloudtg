@@ -1,0 +1,25 @@
+# Rust / Cargo
+/target
+**/*.rs.bk
+
+# Node
+node_modules
+dist
+.vite
+
+# Tauri
+/src-tauri/target
+/src-tauri/gen
+
+# Runtime dirs
+/data
+/cache
+/logs
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
