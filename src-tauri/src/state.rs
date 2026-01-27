@@ -77,7 +77,8 @@ impl AppState {
     db.migrate().await?;
 
     let tg_settings = crate::settings::get_tg_settings(db.pool()).await?;
-    let telegram = make_telegram_service(paths.clone(), app.clone(), tg_settings)?;
+    let tdlib_path = crate::settings::get_tdlib_path(db.pool()).await?;
+    let telegram = make_telegram_service(paths.clone(), app.clone(), tg_settings, tdlib_path)?;
 
     {
       let mut w = self.inner.write();

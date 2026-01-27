@@ -16,12 +16,12 @@ export function Login() {
       <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <b>Авторизация Telegram</b>
         <div style={{ opacity: 0.8, marginTop: 6 }}>
-          Нужны значения API_ID и API_HASH из Telegram. Их можно задать в настройках.
+          Нужны API_ID, API_HASH и путь к TDLib. Всё задаётся в настройках.
         </div>
       </div>
       {auth === "wait_config" ? (
         <div style={{ padding: 12, border: "1px solid #f99", borderRadius: 10, background: "#fee" }}>
-          Сначала заполни API_ID и API_HASH в настройках.
+          Сначала заполни API_ID, API_HASH и путь к TDLib в настройках.
         </div>
       ) : null}
 

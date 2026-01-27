@@ -114,17 +114,17 @@ pub struct TdlibTelegram {
 
 enum TdlibCommand {
   Td(String),
-  SetConfig { api_id: i32, api_hash: String }
+  SetConfig { api_id: i32, api_hash: String, tdlib_path: Option<String> }
 }
 
 impl TdlibTelegram {
-  pub fn new(paths: Paths, app: tauri::AppHandle, initial_settings: Option<TgSettings>) -> anyhow::Result<Self> {
-    let lib_path = resolve_tdlib_path(&paths)?;
-
+  pub fn new(
+    paths: Paths,
+    app: tauri::AppHandle,
+    initial_settings: Option<TgSettings>,
+    initial_tdlib_path: Option<String>
+  ) -> anyhow::Result<Self> {
     let (tx, rx) = mpsc::channel::<TdlibCommand>();
-
-    let client = TdlibClient::load(&lib_path)?;
-    client.set_verbosity(2);
 
     let app_for_thread = app.clone();
     let paths_for_thread = paths.clone();
@@ -132,72 +132,82 @@ impl TdlibTelegram {
       Some(s) => Some(TdlibConfig::from_settings(&paths, s.api_id, s.api_hash)?),
       None => None
     };
+    let mut lib_path = resolve_tdlib_path(&paths, initial_tdlib_path.as_deref());
 
     std::thread::spawn(move || {
       let mut last_state: Option<AuthState> = None;
       let mut waiting_for_params = false;
+      let mut client: Option<TdlibClient> = None;
+      let mut pending: Vec<String> = Vec::new();
 
-      let _ = client.send(&json!({"@type":"getAuthorizationState"}).to_string());
+      if config.is_none() || lib_path.is_none() {
+        set_auth_state(&app_for_thread, AuthState::WaitConfig, &mut last_state);
+      }
 
       loop {
         match rx.recv_timeout(Duration::from_millis(10)) {
-          Ok(TdlibCommand::Td(msg)) => {
-            let _ = client.send(&msg);
-          }
-          Ok(TdlibCommand::SetConfig { api_id, api_hash }) => {
-            match TdlibConfig::from_settings(&paths_for_thread, api_id, api_hash) {
-              Ok(cfg) => {
-                config = Some(cfg);
-                if waiting_for_params {
-                  if let Some(cfg) = config.as_ref() {
-                    let payload = build_tdlib_parameters(cfg);
-                    let _ = client.send(&payload);
-                    waiting_for_params = false;
-                  }
-                }
-              }
-              Err(e) => {
-                tracing::error!("Не удалось применить настройки TDLib: {e}");
-              }
-            }
+          Ok(cmd) => {
+            handle_command(
+              cmd,
+              &paths_for_thread,
+              &mut config,
+              &mut lib_path,
+              &mut client,
+              &mut waiting_for_params,
+              &mut pending,
+              &app_for_thread,
+              &mut last_state
+            );
           }
           Err(mpsc::RecvTimeoutError::Timeout) => {}
           Err(mpsc::RecvTimeoutError::Disconnected) => break
         }
 
-        while let Ok(msg) = rx.try_recv() {
-          match msg {
-            TdlibCommand::Td(m) => {
-              let _ = client.send(&m);
-            }
-            TdlibCommand::SetConfig { api_id, api_hash } => {
-              match TdlibConfig::from_settings(&paths_for_thread, api_id, api_hash) {
-                Ok(cfg) => {
-                  config = Some(cfg);
-                  if waiting_for_params {
-                    if let Some(cfg) = config.as_ref() {
-                      let payload = build_tdlib_parameters(cfg);
-                      let _ = client.send(&payload);
-                      waiting_for_params = false;
-                    }
-                  }
+        while let Ok(cmd) = rx.try_recv() {
+          handle_command(
+            cmd,
+            &paths_for_thread,
+            &mut config,
+            &mut lib_path,
+            &mut client,
+            &mut waiting_for_params,
+            &mut pending,
+            &app_for_thread,
+            &mut last_state
+          );
+        }
+
+        if client.is_none() {
+          if let (Some(_cfg), Some(lp)) = (config.as_ref(), lib_path.as_ref()) {
+            match TdlibClient::load(lp) {
+              Ok(c) => {
+                c.set_verbosity(2);
+                let _ = c.send(&json!({"@type":"getAuthorizationState"}).to_string());
+                for msg in pending.drain(..) {
+                  let _ = c.send(&msg);
                 }
-                Err(e) => {
-                  tracing::error!("Не удалось применить настройки TDLib: {e}");
-                }
+                client = Some(c);
+              }
+              Err(e) => {
+                tracing::error!("Не удалось загрузить TDLib: {e}");
+                set_auth_state(&app_for_thread, AuthState::WaitConfig, &mut last_state);
               }
             }
           }
         }
 
-        if let Some(resp) = client.receive(0.1) {
-          if let Err(e) = handle_tdlib_response(&resp, &client, &mut config, &mut waiting_for_params, &app_for_thread, &mut last_state) {
-            tracing::error!("Ошибка TDLib: {e}");
+        if let Some(c) = client.as_ref() {
+          if let Some(resp) = c.receive(0.1) {
+            if let Err(e) = handle_tdlib_response(&resp, c, &mut config, &mut waiting_for_params, &app_for_thread, &mut last_state) {
+              tracing::error!("Ошибка TDLib: {e}");
+            }
           }
         }
       }
 
-      client.destroy();
+      if let Some(c) = client {
+        c.destroy();
+      }
     });
 
     Ok(Self { tx })
@@ -240,9 +250,9 @@ impl TelegramService for TdlibTelegram {
     Ok(())
   }
 
-  async fn configure(&self, api_id: i32, api_hash: String) -> Result<(), TgError> {
+  async fn configure(&self, api_id: i32, api_hash: String, tdlib_path: Option<String>) -> Result<(), TgError> {
     self.tx
-      .send(TdlibCommand::SetConfig { api_id, api_hash })
+      .send(TdlibCommand::SetConfig { api_id, api_hash, tdlib_path })
       .map_err(|_| TgError::Other("TDLib поток не запущен".into()))?;
     Ok(())
   }
@@ -265,9 +275,68 @@ impl TelegramService for TdlibTelegram {
   }
 }
 
-fn resolve_tdlib_path(paths: &Paths) -> anyhow::Result<PathBuf> {
+fn handle_command(
+  cmd: TdlibCommand,
+  paths: &Paths,
+  config: &mut Option<TdlibConfig>,
+  lib_path: &mut Option<PathBuf>,
+  client: &mut Option<TdlibClient>,
+  waiting_for_params: &mut bool,
+  pending: &mut Vec<String>,
+  app: &tauri::AppHandle,
+  last_state: &mut Option<AuthState>
+) {
+  match cmd {
+    TdlibCommand::Td(m) => {
+      if let Some(c) = client.as_ref() {
+        let _ = c.send(&m);
+      } else {
+        pending.push(m);
+      }
+    }
+    TdlibCommand::SetConfig { api_id, api_hash, tdlib_path } => {
+      match TdlibConfig::from_settings(paths, api_id, api_hash) {
+        Ok(cfg) => {
+          *config = Some(cfg);
+        }
+        Err(e) => {
+          tracing::error!("Не удалось применить настройки TDLib: {e}");
+          return;
+        }
+      }
+
+      *lib_path = resolve_tdlib_path(paths, tdlib_path.as_deref());
+
+      if client.is_some() && *waiting_for_params {
+        if let Some(cfg) = config.as_ref() {
+          let payload = build_tdlib_parameters(cfg);
+          if let Some(c) = client.as_ref() {
+            let _ = c.send(&payload);
+          }
+          *waiting_for_params = false;
+        }
+      }
+
+      if client.is_none() && (config.is_none() || lib_path.is_none()) {
+        set_auth_state(app, AuthState::WaitConfig, last_state);
+      }
+    }
+  }
+}
+
+fn resolve_tdlib_path(paths: &Paths, configured: Option<&str>) -> Option<PathBuf> {
+  if let Some(p) = configured {
+    let path = PathBuf::from(p);
+    if path.exists() {
+      return Some(path);
+    }
+  }
+
   if let Ok(p) = std::env::var("CLOUDTG_TDLIB_PATH") {
-    return Ok(PathBuf::from(p));
+    let path = PathBuf::from(p);
+    if path.exists() {
+      return Some(path);
+    }
   }
 
   let base = &paths.base_dir;
@@ -283,13 +352,11 @@ fn resolve_tdlib_path(paths: &Paths) -> anyhow::Result<PathBuf> {
 
   for c in candidates {
     if c.exists() {
-      return Ok(c);
+      return Some(c);
     }
   }
 
-  Err(anyhow::anyhow!(
-    "Не удалось найти libtdjson. Укажи CLOUDTG_TDLIB_PATH или положи библиотеку рядом с бинарём"
-  ))
+  None
 }
 
 fn handle_tdlib_response(

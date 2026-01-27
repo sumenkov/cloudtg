@@ -84,7 +84,12 @@ pub async fn settings_get_tg(state: State<'_, AppState>) -> Result<settings::TgS
 }
 
 #[tauri::command]
-pub async fn settings_set_tg(state: State<'_, AppState>, api_id: i32, api_hash: String) -> Result<(), String> {
+pub async fn settings_set_tg(
+  state: State<'_, AppState>,
+  api_id: i32,
+  api_hash: String,
+  tdlib_path: Option<String>
+) -> Result<(), String> {
   if api_id <= 0 {
     return Err("API_ID должен быть положительным числом".into());
   }
@@ -93,9 +98,19 @@ pub async fn settings_set_tg(state: State<'_, AppState>, api_id: i32, api_hash: 
   }
 
   let db = state.db().map_err(map_err)?;
-  settings::set_tg_settings(db.pool(), api_id, api_hash.clone()).await.map_err(map_err)?;
+  if let Some(p) = tdlib_path.as_ref().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()) {
+    let path = std::path::Path::new(&p);
+    if !path.exists() {
+      return Err("Указанный путь к TDLib не существует".into());
+    }
+    if !path.is_file() {
+      return Err("Указанный путь к TDLib должен указывать на файл библиотеки".into());
+    }
+  }
+
+  settings::set_tg_settings(db.pool(), api_id, api_hash.clone(), tdlib_path.clone()).await.map_err(map_err)?;
 
   let tg = state.telegram().map_err(map_err)?;
-  tg.configure(api_id, api_hash).await.map_err(|e| e.to_string())?;
+  tg.configure(api_id, api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
   Ok(())
 }

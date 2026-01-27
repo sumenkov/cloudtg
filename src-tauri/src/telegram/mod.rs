@@ -29,7 +29,7 @@ pub trait TelegramService: Send + Sync {
   async fn auth_start(&self, phone: String) -> Result<(), TgError>;
   async fn auth_submit_code(&self, code: String) -> Result<(), TgError>;
   async fn auth_submit_password(&self, password: String) -> Result<(), TgError>;
-  async fn configure(&self, api_id: i32, api_hash: String) -> Result<(), TgError>;
+  async fn configure(&self, api_id: i32, api_hash: String, tdlib_path: Option<String>) -> Result<(), TgError>;
 
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError>;
 
@@ -50,7 +50,8 @@ mod tdlib;
 pub fn make_telegram_service(
   paths: Paths,
   app: tauri::AppHandle,
-  tg_settings: Option<crate::settings::TgSettings>
+  tg_settings: Option<crate::settings::TgSettings>,
+  tdlib_path: Option<String>
 ) -> anyhow::Result<Arc<dyn TelegramService>> {
   #[cfg(feature = "mock_telegram")]
   {
@@ -59,7 +60,7 @@ pub fn make_telegram_service(
 
   #[cfg(all(not(feature = "mock_telegram"), feature = "tdlib"))]
   {
-    return Ok(Arc::new(tdlib::TdlibTelegram::new(paths, app, tg_settings)?));
+    return Ok(Arc::new(tdlib::TdlibTelegram::new(paths, app, tg_settings, tdlib_path)?));
   }
 
   #[cfg(all(not(feature = "mock_telegram"), not(feature = "tdlib")))]

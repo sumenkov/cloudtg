@@ -39,7 +39,7 @@ impl TelegramService for MockTelegram {
   async fn auth_start(&self, _phone: String) -> Result<(), TgError> { *self.authed.lock() = true; Ok(()) }
   async fn auth_submit_code(&self, _code: String) -> Result<(), TgError> { *self.authed.lock() = true; Ok(()) }
   async fn auth_submit_password(&self, _password: String) -> Result<(), TgError> { *self.authed.lock() = true; Ok(()) }
-  async fn configure(&self, _api_id: i32, _api_hash: String) -> Result<(), TgError> { Ok(()) }
+  async fn configure(&self, _api_id: i32, _api_hash: String, _tdlib_path: Option<String>) -> Result<(), TgError> { Ok(()) }
 
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError> {
     if !*self.authed.lock() { return Err(TgError::AuthRequired); }

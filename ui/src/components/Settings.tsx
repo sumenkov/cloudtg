@@ -5,12 +5,14 @@ import { useAppStore } from "../store/app";
 type TgSettingsView = {
   api_id: number | null;
   api_hash: string | null;
+  tdlib_path: string | null;
 };
 
 export function Settings({ onClose }: { onClose?: () => void }) {
   const { setError, refreshAuth } = useAppStore();
   const [apiId, setApiId] = useState("");
   const [apiHash, setApiHash] = useState("");
+  const [tdlibPath, setTdlibPath] = useState("");
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,6 +21,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
         const s = await invoke<TgSettingsView>("settings_get_tg");
         if (s.api_id) setApiId(String(s.api_id));
         if (s.api_hash) setApiHash(s.api_hash);
+        if (s.tdlib_path) setTdlibPath(s.tdlib_path);
       } catch (e: any) {
         setError(String(e));
       }
@@ -54,6 +57,19 @@ export function Settings({ onClose }: { onClose?: () => void }) {
         />
       </label>
 
+      <label>
+        Путь к TDLib (libtdjson)
+        <input
+          value={tdlibPath}
+          onChange={(e) => setTdlibPath(e.target.value)}
+          placeholder="/полный/путь/к/libtdjson.so"
+          style={{ width: "100%", padding: 10 }}
+        />
+        <div style={{ opacity: 0.7, marginTop: 4 }}>
+          Можно оставить пустым, если библиотека лежит рядом с бинарём приложения.
+        </div>
+      </label>
+
       <div style={{ display: "flex", gap: 10 }}>
         <button
           onClick={async () => {
@@ -67,7 +83,11 @@ export function Settings({ onClose }: { onClose?: () => void }) {
                 setStatus("API_HASH не может быть пустым");
                 return;
               }
-              await invoke("settings_set_tg", { api_id: id, api_hash: apiHash.trim() });
+              await invoke("settings_set_tg", {
+                api_id: id,
+                api_hash: apiHash.trim(),
+                tdlib_path: tdlibPath.trim() ? tdlibPath.trim() : null
+              });
               await refreshAuth();
               setStatus("Сохранено. Можно продолжить авторизацию.");
             } catch (e: any) {
