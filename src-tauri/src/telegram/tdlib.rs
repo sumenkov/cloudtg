@@ -2,6 +2,7 @@ use std::{
   ffi::{CStr, CString},
   os::raw::{c_char, c_double, c_int, c_void},
   path::{Path, PathBuf},
+  process::Command,
   sync::mpsc,
   time::Duration
 };
@@ -139,6 +140,7 @@ impl TdlibTelegram {
       let mut waiting_for_params = false;
       let mut client: Option<TdlibClient> = None;
       let mut pending: Vec<String> = Vec::new();
+      let mut build_attempted = false;
 
       if config.is_none() || lib_path.is_none() {
         set_auth_state(&app_for_thread, AuthState::WaitConfig, &mut last_state);
@@ -178,6 +180,19 @@ impl TdlibTelegram {
         }
 
         if client.is_none() {
+          if config.is_some() && lib_path.is_none() && !build_attempted {
+            build_attempted = true;
+            match attempt_tdlib_build(&paths_for_thread) {
+              Ok(p) => {
+                lib_path = Some(p);
+              }
+              Err(e) => {
+                tracing::error!("Автосборка TDLib не удалась: {e}");
+                set_auth_state(&app_for_thread, AuthState::WaitConfig, &mut last_state);
+              }
+            }
+          }
+
           if let (Some(_cfg), Some(lp)) = (config.as_ref(), lib_path.as_ref()) {
             match TdlibClient::load(lp) {
               Ok(c) => {
@@ -322,6 +337,103 @@ fn handle_command(
       }
     }
   }
+}
+
+fn attempt_tdlib_build(paths: &Paths) -> anyhow::Result<PathBuf> {
+  let base = tdlib_reserved_dir(paths);
+  std::fs::create_dir_all(&base)?;
+
+  let repo_dir = base.join("td");
+  if !repo_dir.exists() {
+    run_command(
+      Command::new("git")
+        .arg("clone")
+        .arg("--depth")
+        .arg("1")
+        .arg("https://github.com/tdlib/td.git")
+        .arg(&repo_dir),
+      "git clone"
+    )?;
+  }
+
+  let build_dir = repo_dir.join("build");
+  std::fs::create_dir_all(&build_dir)?;
+
+  if !build_dir.join("CMakeCache.txt").exists() {
+    run_command(
+      Command::new("cmake")
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .arg("..")
+        .current_dir(&build_dir),
+      "cmake configure"
+    )?;
+  }
+
+  let mut build_cmd = Command::new("cmake");
+  build_cmd.arg("--build").arg(".").arg("--target").arg("tdjson");
+  #[cfg(target_os = "windows")]
+  {
+    build_cmd.arg("--config").arg("Release");
+  }
+  build_cmd.current_dir(&build_dir);
+
+  run_command(build_cmd, "cmake build")?;
+
+  find_tdjson_lib(&repo_dir).ok_or_else(|| anyhow::anyhow!("Сборка прошла, но libtdjson не найден"))
+}
+
+fn run_command(mut cmd: Command, name: &str) -> anyhow::Result<()> {
+  let out = cmd.output()?;
+  if !out.status.success() {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    return Err(anyhow::anyhow!(
+      "{name} завершился с ошибкой. stdout: {stdout} stderr: {stderr}"
+    ));
+  }
+  Ok(())
+}
+
+fn tdlib_reserved_dir(paths: &Paths) -> PathBuf {
+  let base = paths.base_dir.join("third_party").join("tdlib");
+  if base.exists() {
+    return base;
+  }
+  if let Ok(cwd) = std::env::current_dir() {
+    let alt = cwd.join("third_party").join("tdlib");
+    if alt.exists() {
+      return alt;
+    }
+  }
+  base
+}
+
+fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
+  let mut stack = vec![root.to_path_buf()];
+  let names = [
+    "libtdjson.so",
+    "libtdjson.so.1",
+    "libtdjson.dylib",
+    "tdjson.dll"
+  ];
+
+  while let Some(dir) = stack.pop() {
+  let entries = match std::fs::read_dir(&dir) {
+    Ok(v) => v,
+    Err(_) => continue
+  };
+    for e in entries.flatten() {
+      let path = e.path();
+      if path.is_dir() {
+        stack.push(path);
+      } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if names.iter().any(|n| n == &name) {
+          return Some(path);
+        }
+      }
+    }
+  }
+  None
 }
 
 fn resolve_tdlib_path(paths: &Paths, configured: Option<&str>) -> Option<PathBuf> {

@@ -33,7 +33,8 @@ export function Settings({ onClose }: { onClose?: () => void }) {
       <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <b>Настройки Telegram API</b>
         <div style={{ opacity: 0.8, marginTop: 6 }}>
-          Укажи значения API_ID и API_HASH, полученные в Telegram.
+          Укажи значения API_ID и API_HASH, полученные в Telegram. Если путь к TDLib пустой,
+          приложение попробует скачать и собрать библиотеку автоматически.
         </div>
       </div>
 
