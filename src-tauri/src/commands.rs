@@ -163,17 +163,10 @@ fn resolve_tdlib_path_effective(paths: &Paths, configured: Option<&str>) -> Opti
     }
   }
 
-  let base = &paths.base_dir;
-
-  #[cfg(target_os = "windows")]
-  let candidates = [base.join("tdjson.dll")];
-
-  #[cfg(target_os = "macos")]
-  let candidates = [base.join("libtdjson.dylib")];
-
-  #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-  let candidates = [base.join("libtdjson.so"), base.join("libtdjson.so.1")];
-
+  let mut candidates = tdlib_platform_candidates(&paths.base_dir);
+  if let Some(resource_dir) = paths.resource_dir.as_ref() {
+    candidates.extend(tdlib_resource_candidates(resource_dir));
+  }
   for c in candidates {
     if c.exists() {
       return Some(c);
@@ -188,6 +181,35 @@ fn resolve_tdlib_path_effective(paths: &Paths, configured: Option<&str>) -> Opti
   }
 
   None
+}
+
+fn tdlib_platform_candidates(base: &Path) -> Vec<PathBuf> {
+  #[cfg(target_os = "windows")]
+  let names = ["tdjson.dll"];
+
+  #[cfg(target_os = "macos")]
+  let names = ["libtdjson.dylib"];
+
+  #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+  let names = ["libtdjson.so", "libtdjson.so.1"];
+
+  names.iter().map(|name| base.join(name)).collect()
+}
+
+fn tdlib_resource_candidates(resource_dir: &Path) -> Vec<PathBuf> {
+  let os = std::env::consts::OS;
+  let arch = std::env::consts::ARCH;
+  let mut bases = Vec::new();
+  bases.push(resource_dir.join("tdlib").join(format!("{os}-{arch}")));
+  bases.push(resource_dir.join("tdlib").join(os));
+  bases.push(resource_dir.join("tdlib"));
+  bases.push(resource_dir.to_path_buf());
+
+  let mut out = Vec::new();
+  for base in bases {
+    out.extend(tdlib_platform_candidates(&base));
+  }
+  out
 }
 
 fn tdlib_reserved_dir(paths: &Paths) -> PathBuf {

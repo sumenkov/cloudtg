@@ -14,6 +14,48 @@
 > Если путь к TDLib не указан и библиотека не найдена, приложение попробует скачать и собрать TDLib в `./third_party/tdlib`.
 > Для автосборки нужны `git`, `cmake` и C/C++ toolchain, установленные в системе.
 
+### Предсобранная TDLib (быстрый запуск без сборки)
+Чтобы приложение запускалось сразу, положи `libtdjson` в ресурсы приложения:
+
+```
+src-tauri/resources/tdlib/<os>-<arch>/libtdjson.*
+```
+
+Примеры:
+- Windows: `src-tauri/resources/tdlib/windows-x86_64/tdjson.dll`
+- macOS (Apple Silicon): `src-tauri/resources/tdlib/macos-aarch64/libtdjson.dylib`
+- Ubuntu Linux: `src-tauri/resources/tdlib/linux-x86_64/libtdjson.so`
+
+Поддерживаются также папки `tdlib/<os>` и просто `tdlib/`.
+При запуске приложение сначала ищет библиотеку в ресурсах и рядом с бинарём, и только затем запускает автосборку.
+
+### CI артефакты TDLib
+В репозитории есть workflow `Сборка TDLib (prebuilt)` — он собирает TDLib под Windows/macOS/Linux
+и выкладывает артефакты в GitHub Actions, а при публикации релиза добавляет файлы в релиз.
+
+### Скачать предсобранную TDLib автоматически
+Linux/macOS:
+```bash
+./scripts/fetch-tdlib.sh
+```
+
+Windows (PowerShell):
+```powershell
+.\scripts\fetch-tdlib.ps1
+```
+
+Через npm (автоопределение ОС):
+```bash
+npm run tdlib:fetch
+```
+
+Если библиотека уже есть в `src-tauri/resources/tdlib`, скрипт просто сообщит путь и ничего не скачает.
+
+Скрипты берут файлы из последнего релиза GitHub.
+Если репозиторий не определяется автоматически, задай переменную:
+`CLOUDTG_TDLIB_REPO=owner/repo`.
+Для приватных репозиториев добавь `GITHUB_TOKEN` или `GH_TOKEN`.
+
 ### Быстрая установка зависимостей для автосборки TDLib
 - Ubuntu/Debian:
   ```bash

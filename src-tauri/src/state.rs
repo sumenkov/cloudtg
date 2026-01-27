@@ -70,7 +70,7 @@ impl AppState {
   }
 
   async fn init(&self, app: AppHandle) -> anyhow::Result<()> {
-    let paths = Paths::detect()?;
+    let paths = Paths::detect()?.with_resource_dir(app.path().resource_dir().ok());
     paths.ensure_dirs()?;
     tracing::info!(event = "init_paths", base_dir = %paths.base_dir.display(), "Пути приложения инициализированы");
 

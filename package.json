@@ -6,6 +6,7 @@
     "dev": "npm --workspace ui run dev",
     "build": "npm --workspace ui run build",
     "test": "npm --workspace ui run test",
+    "tdlib:fetch": "node scripts/fetch-tdlib.js",
     "tauri:dev": "npx tauri dev --config src-tauri/tauri.conf.json",
     "tauri:build": "npx tauri build --config src-tauri/tauri.conf.json",
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml"

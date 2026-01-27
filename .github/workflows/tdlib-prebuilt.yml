@@ -1,0 +1,147 @@
+name: Сборка TDLib (prebuilt)
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux-x86_64
+          - os: windows-2022
+            name: windows-x86_64
+          - os: macos-13
+            name: macos-x86_64
+          - os: macos-14
+            name: macos-aarch64
+
+    steps:
+      - name: Клонирование репозитория
+        uses: actions/checkout@v4
+
+      - name: Установка зависимостей (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git cmake gperf ninja-build build-essential pkg-config libssl-dev zlib1g-dev zip
+
+      - name: Установка зависимостей (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake gperf openssl@3 ninja
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      - name: Установка MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-gperf
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-zlib
+            git
+
+      - name: Сборка TDLib (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/tdlib/td.git
+          cd td
+          mkdir build
+          cd build
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+          cmake --build . --target tdjson
+
+      - name: Сборка TDLib
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR:-}"
+          git clone --depth 1 https://github.com/tdlib/td.git
+          cd td
+          mkdir build
+          cd build
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ${OPENSSL_ROOT_DIR:+-DOPENSSL_ROOT_DIR="$OPENSSL_ROOT_DIR"} ..
+          cmake --build . --target tdjson
+
+      - name: Подготовка артефакта (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}"
+          lib_path="$(find td/build -name "tdjson.dll" -type f | head -n 1)"
+          if [[ -z "${lib_path:-}" ]]; then
+            echo "tdjson.dll не найден"
+            exit 1
+          fi
+          cp "$lib_path" "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/"
+          for dep in libcrypto-3-x64.dll libssl-3-x64.dll libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll zlib1.dll; do
+            if [[ -f "/mingw64/bin/$dep" ]]; then
+              cp "/mingw64/bin/$dep" "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/"
+            fi
+          done
+          git -C td rev-parse HEAD > "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt"
+
+      - name: Архивирование артефакта (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $src = "$env:GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/*"
+          $dst = "$env:GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.zip"
+          Compress-Archive -Path $src -DestinationPath $dst -Force
+
+      - name: Подготовка артефакта
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            lib_path="$(find td/build -name "libtdjson.dylib" -type f | head -n 1)"
+          else
+            lib_path="$(find td/build \( -name "libtdjson.so" -o -name "libtdjson.so.1" \) -type f | head -n 1)"
+          fi
+          if [[ -z "${lib_path:-}" ]]; then
+            echo "libtdjson не найден"
+            exit 1
+          fi
+          cp "$lib_path" "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/"
+          git -C td rev-parse HEAD > "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt"
+
+      - name: Архивирование артефакта
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}"
+          zip -r "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.zip" .
+
+      - name: Загрузка артефакта
+        uses: actions/upload-artifact@v4
+        with:
+          name: tdlib-${{ matrix.name }}
+          path: out/tdlib/tdlib-${{ matrix.name }}.zip
+
+      - name: Публикация в релиз
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/tdlib/tdlib-${{ matrix.name }}.zip

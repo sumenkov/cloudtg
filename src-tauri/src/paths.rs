@@ -5,7 +5,8 @@ pub struct Paths {
   pub base_dir: PathBuf,
   pub data_dir: PathBuf,
   pub cache_dir: PathBuf,
-  pub logs_dir: PathBuf
+  pub logs_dir: PathBuf,
+  pub resource_dir: Option<PathBuf>
 }
 
 impl Paths {
@@ -22,7 +23,18 @@ impl Paths {
     let data_dir = base_dir.join("data");
     let cache_dir = base_dir.join("cache");
     let logs_dir = base_dir.join("logs");
-    Self { base_dir, data_dir, cache_dir, logs_dir }
+    Self {
+      base_dir,
+      data_dir,
+      cache_dir,
+      logs_dir,
+      resource_dir: None
+    }
+  }
+
+  pub fn with_resource_dir(mut self, resource_dir: Option<PathBuf>) -> Self {
+    self.resource_dir = resource_dir;
+    self
   }
 
   pub fn ensure_dirs(&self) -> anyhow::Result<()> {
