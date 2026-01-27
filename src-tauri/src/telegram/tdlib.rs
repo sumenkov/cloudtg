@@ -678,13 +678,20 @@ fn auth_state_to_str(state: &AuthState) -> &'static str {
 }
 
 fn emit_build(app: &tauri::AppHandle, state: &str, message: &str, detail: Option<String>) {
+  let detail_for_log = detail.clone();
   let payload = BuildEvent {
     state: state.to_string(),
     message: message.to_string(),
     detail
   };
   let _ = app.emit("tdlib_build_status", payload);
-  tracing::info!(event = "tdlib_build_status", state = state, message = message, detail = detail.as_deref().unwrap_or(""), "TDLib");
+  tracing::info!(
+    event = "tdlib_build_status",
+    state = state,
+    message = message,
+    detail = detail_for_log.as_deref().unwrap_or(""),
+    "TDLib"
+  );
 }
 
 fn emit_build_log(app: &tauri::AppHandle, stream: &str, line: &str) {
