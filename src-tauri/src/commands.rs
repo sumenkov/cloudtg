@@ -26,8 +26,11 @@ async fn ensure_storage_chat_id(state: &AppState) -> anyhow::Result<i64> {
 pub async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
   let s = match state.auth_state() {
     AuthState::Unknown => "unknown",
-    AuthState::NeedsAuth => "needs_auth",
-    AuthState::Ready => "ready"
+    AuthState::WaitPhone => "wait_phone",
+    AuthState::WaitCode => "wait_code",
+    AuthState::WaitPassword => "wait_password",
+    AuthState::Ready => "ready",
+    AuthState::Closed => "closed"
   };
   Ok(AuthStatus { state: s.to_string() })
 }
@@ -36,7 +39,6 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, Strin
 pub async fn auth_start(state: State<'_, AppState>, phone: String) -> Result<(), String> {
   let tg = state.telegram().map_err(map_err)?;
   tg.auth_start(phone).await.map_err(|e| e.to_string())?;
-  state.set_auth_state(AuthState::NeedsAuth);
   Ok(())
 }
 
@@ -44,7 +46,6 @@ pub async fn auth_start(state: State<'_, AppState>, phone: String) -> Result<(),
 pub async fn auth_submit_code(state: State<'_, AppState>, code: String) -> Result<(), String> {
   let tg = state.telegram().map_err(map_err)?;
   tg.auth_submit_code(code).await.map_err(|e| e.to_string())?;
-  state.set_auth_state(AuthState::Ready);
   Ok(())
 }
 
@@ -52,7 +53,6 @@ pub async fn auth_submit_code(state: State<'_, AppState>, code: String) -> Resul
 pub async fn auth_submit_password(state: State<'_, AppState>, password: String) -> Result<(), String> {
   let tg = state.telegram().map_err(map_err)?;
   tg.auth_submit_password(password).await.map_err(|e| e.to_string())?;
-  state.set_auth_state(AuthState::Ready);
   Ok(())
 }
 

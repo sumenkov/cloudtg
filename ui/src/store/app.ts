@@ -9,13 +9,14 @@ export type DirNode = {
 };
 
 type State = {
-  auth: "unknown" | "needs_auth" | "ready";
+  auth: "unknown" | "wait_phone" | "wait_code" | "wait_password" | "ready" | "closed";
   tree: DirNode | null;
   error: string | null;
 
   setAuth: (v: State["auth"] | string) => void;
   setError: (v: string | null) => void;
 
+  refreshAuth: () => Promise<string>;
   refreshTree: () => Promise<void>;
   createDir: (parentId: string | null, name: string) => Promise<void>;
 };
@@ -27,6 +28,12 @@ export const useAppStore = create<State>((set, get) => ({
 
   setAuth: (v) => set({ auth: v as any }),
   setError: (v) => set({ error: v }),
+
+  refreshAuth: async () => {
+    const status = await invoke<{ state: string }>("auth_status");
+    set({ auth: status.state as any });
+    return status.state;
+  },
 
   refreshTree: async () => {
     const t = await invoke<DirNode>("dir_list_tree");

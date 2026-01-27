@@ -14,11 +14,11 @@ pub struct UploadedMessage {
 
 #[derive(thiserror::Error, Debug)]
 pub enum TgError {
-  #[error("not implemented")]
+  #[error("не реализовано")]
   NotImplemented,
-  #[error("auth required")]
+  #[error("требуется авторизация")]
   AuthRequired,
-  #[error("io error: {0}")]
+  #[error("ошибка ввода-вывода: {0}")]
   Io(#[from] std::io::Error),
   #[error("{0}")]
   Other(String)
@@ -60,7 +60,7 @@ pub fn make_telegram_service(paths: Paths, app: tauri::AppHandle) -> anyhow::Res
   #[cfg(all(not(feature = "mock_telegram"), not(feature = "tdlib")))]
   {
     Err(anyhow::anyhow!(
-      "No telegram backend selected. Enable 'mock_telegram' or 'tdlib' feature."
+      "Не выбран Telegram backend. Включи фичу 'mock_telegram' или 'tdlib'."
     ))
   }
 }

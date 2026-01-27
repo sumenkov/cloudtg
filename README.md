@@ -9,8 +9,8 @@
 - Метаданные в Telegram: теги `#ocltg #v1` (модуль `fsmeta`)
 - Портативность: всё рядом с бинарём: `./data`, `./cache`, `./logs`
 
-> В этом репозитории Telegram-часть по умолчанию в режиме **mock** (для разработки и тестов).
-> Реальная интеграция TDLib предусмотрена фичей `tdlib` и заглушкой в `src-tauri/src/telegram/tdlib.rs`.
+> Для реальной работы с Telegram нужен TDLib (libtdjson) и значения `CLOUDTG_TG_API_ID` / `CLOUDTG_TG_API_HASH`.
+> Библиотеку можно положить рядом с бинарём или указать путь через `CLOUDTG_TDLIB_PATH`.
 
 ## Быстрый старт (dev)
 

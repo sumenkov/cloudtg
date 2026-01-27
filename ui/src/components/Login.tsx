@@ -3,17 +3,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store/app";
 
 export function Login() {
-  const { setAuth, setError } = useAppStore();
+  const { auth, setError, refreshAuth } = useAppStore();
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
-  const [phase, setPhase] = useState<"phone" | "code">("phone");
+  const [password, setPassword] = useState("");
+
+  const phase = auth === "wait_password" ? "password" : auth === "wait_code" ? "code" : "phone";
 
   return (
     <div style={{ display: "grid", gap: 10, maxWidth: 520 }}>
       <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <b>Авторизация Telegram</b>
         <div style={{ opacity: 0.8, marginTop: 6 }}>
-          Сейчас backend работает в режиме mock. Команды оставлены под TDLib.
+          Нужны значения CLOUDTG_TG_API_ID и CLOUDTG_TG_API_HASH в окружении.
         </div>
       </div>
 
@@ -32,7 +34,7 @@ export function Login() {
             onClick={async () => {
               try {
                 await invoke("auth_start", { phone });
-                setPhase("code");
+                await refreshAuth();
               } catch (e: any) {
                 setError(String(e));
               }
@@ -42,7 +44,7 @@ export function Login() {
             Получить код
           </button>
         </div>
-      ) : (
+      ) : phase === "code" ? (
         <div style={{ display: "grid", gap: 8 }}>
           <label>
             Код
@@ -57,7 +59,7 @@ export function Login() {
             onClick={async () => {
               try {
                 await invoke("auth_submit_code", { code });
-                setAuth("ready");
+                await refreshAuth();
               } catch (e: any) {
                 setError(String(e));
               }
@@ -66,11 +68,40 @@ export function Login() {
           >
             Войти
           </button>
-          <button onClick={() => setPhase("phone")} style={{ padding: 10, borderRadius: 10, opacity: 0.8 }}>
-            Назад
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          <label>
+            Пароль 2FA
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              type="password"
+              style={{ width: "100%", padding: 10 }}
+            />
+          </label>
+          <button
+            onClick={async () => {
+              try {
+                await invoke("auth_submit_password", { password });
+                await refreshAuth();
+              } catch (e: any) {
+                setError(String(e));
+              }
+            }}
+            style={{ padding: 10, borderRadius: 10 }}
+          >
+            Подтвердить
           </button>
         </div>
       )}
+
+      {auth === "closed" ? (
+        <div style={{ padding: 12, border: "1px solid #f99", borderRadius: 10, background: "#fee" }}>
+          Сессия закрыта. Перезапусти приложение.
+        </div>
+      ) : null}
     </div>
   );
 }
