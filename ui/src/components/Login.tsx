@@ -9,15 +9,21 @@ export function Login() {
   const [password, setPassword] = useState("");
 
   const phase = auth === "wait_password" ? "password" : auth === "wait_code" ? "code" : "phone";
+  const disabled = auth === "wait_config";
 
   return (
     <div style={{ display: "grid", gap: 10, maxWidth: 520 }}>
       <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <b>Авторизация Telegram</b>
         <div style={{ opacity: 0.8, marginTop: 6 }}>
-          Нужны значения CLOUDTG_TG_API_ID и CLOUDTG_TG_API_HASH в окружении.
+          Нужны значения API_ID и API_HASH из Telegram. Их можно задать в настройках.
         </div>
       </div>
+      {auth === "wait_config" ? (
+        <div style={{ padding: 12, border: "1px solid #f99", borderRadius: 10, background: "#fee" }}>
+          Сначала заполни API_ID и API_HASH в настройках.
+        </div>
+      ) : null}
 
       {phase === "phone" ? (
         <div style={{ display: "grid", gap: 8 }}>
@@ -27,6 +33,7 @@ export function Login() {
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="+49..."
+              disabled={disabled}
               style={{ width: "100%", padding: 10 }}
             />
           </label>
@@ -39,6 +46,7 @@ export function Login() {
                 setError(String(e));
               }
             }}
+            disabled={disabled}
             style={{ padding: 10, borderRadius: 10 }}
           >
             Получить код
@@ -52,6 +60,7 @@ export function Login() {
               value={code}
               onChange={(e) => setCode(e.target.value)}
               placeholder="12345"
+              disabled={disabled}
               style={{ width: "100%", padding: 10 }}
             />
           </label>
@@ -64,6 +73,7 @@ export function Login() {
                 setError(String(e));
               }
             }}
+            disabled={disabled}
             style={{ padding: 10, borderRadius: 10 }}
           >
             Войти
@@ -78,6 +88,7 @@ export function Login() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               type="password"
+              disabled={disabled}
               style={{ width: "100%", padding: 10 }}
             />
           </label>
@@ -90,6 +101,7 @@ export function Login() {
                 setError(String(e));
               }
             }}
+            disabled={disabled}
             style={{ padding: 10, borderRadius: 10 }}
           >
             Подтвердить

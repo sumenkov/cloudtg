@@ -9,7 +9,8 @@
 - Метаданные в Telegram: теги `#ocltg #v1` (модуль `fsmeta`)
 - Портативность: всё рядом с бинарём: `./data`, `./cache`, `./logs`
 
-> Для реальной работы с Telegram нужен TDLib (libtdjson) и значения `CLOUDTG_TG_API_ID` / `CLOUDTG_TG_API_HASH`.
+> Для реальной работы с Telegram нужен TDLib (libtdjson).
+> API_ID и API_HASH задаются в настройках приложения и хранятся в локальной базе.
 > Библиотеку можно положить рядом с бинарём или указать путь через `CLOUDTG_TDLIB_PATH`.
 
 ## Быстрый старт (dev)

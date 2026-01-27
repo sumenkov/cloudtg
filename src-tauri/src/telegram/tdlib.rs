@@ -12,8 +12,10 @@ use tauri::{Emitter, Manager};
 
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
+use crate::settings::TgSettings;
 use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage};
 
+#[derive(Clone)]
 struct TdlibConfig {
   api_id: i32,
   api_hash: String,
@@ -22,14 +24,7 @@ struct TdlibConfig {
 }
 
 impl TdlibConfig {
-  fn load(paths: &Paths) -> anyhow::Result<Self> {
-    let api_id = std::env::var("CLOUDTG_TG_API_ID")
-      .map_err(|_| anyhow::anyhow!("Не задана переменная окружения CLOUDTG_TG_API_ID"))?
-      .parse::<i32>()
-      .map_err(|_| anyhow::anyhow!("CLOUDTG_TG_API_ID должен быть числом"))?;
-    let api_hash = std::env::var("CLOUDTG_TG_API_HASH")
-      .map_err(|_| anyhow::anyhow!("Не задана переменная окружения CLOUDTG_TG_API_HASH"))?;
-
+  fn from_settings(paths: &Paths, api_id: i32, api_hash: String) -> anyhow::Result<Self> {
     let db_dir = paths.data_dir.join("tdlib");
     let files_dir = paths.cache_dir.join("tdlib_files");
     std::fs::create_dir_all(&db_dir)?;
@@ -114,41 +109,89 @@ impl TdlibClient {
 }
 
 pub struct TdlibTelegram {
-  tx: mpsc::Sender<String>
+  tx: mpsc::Sender<TdlibCommand>
+}
+
+enum TdlibCommand {
+  Td(String),
+  SetConfig { api_id: i32, api_hash: String }
 }
 
 impl TdlibTelegram {
-  pub fn new(paths: Paths, app: tauri::AppHandle) -> anyhow::Result<Self> {
-    let config = TdlibConfig::load(&paths)?;
+  pub fn new(paths: Paths, app: tauri::AppHandle, initial_settings: Option<TgSettings>) -> anyhow::Result<Self> {
     let lib_path = resolve_tdlib_path(&paths)?;
 
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::channel::<TdlibCommand>();
 
     let client = TdlibClient::load(&lib_path)?;
     client.set_verbosity(2);
 
     let app_for_thread = app.clone();
+    let paths_for_thread = paths.clone();
+    let mut config = match initial_settings {
+      Some(s) => Some(TdlibConfig::from_settings(&paths, s.api_id, s.api_hash)?),
+      None => None
+    };
 
     std::thread::spawn(move || {
       let mut last_state: Option<AuthState> = None;
+      let mut waiting_for_params = false;
 
       let _ = client.send(&json!({"@type":"getAuthorizationState"}).to_string());
 
       loop {
         match rx.recv_timeout(Duration::from_millis(10)) {
-          Ok(msg) => {
+          Ok(TdlibCommand::Td(msg)) => {
             let _ = client.send(&msg);
+          }
+          Ok(TdlibCommand::SetConfig { api_id, api_hash }) => {
+            match TdlibConfig::from_settings(&paths_for_thread, api_id, api_hash) {
+              Ok(cfg) => {
+                config = Some(cfg);
+                if waiting_for_params {
+                  if let Some(cfg) = config.as_ref() {
+                    let payload = build_tdlib_parameters(cfg);
+                    let _ = client.send(&payload);
+                    waiting_for_params = false;
+                  }
+                }
+              }
+              Err(e) => {
+                tracing::error!("Не удалось применить настройки TDLib: {e}");
+              }
+            }
           }
           Err(mpsc::RecvTimeoutError::Timeout) => {}
           Err(mpsc::RecvTimeoutError::Disconnected) => break
         }
 
         while let Ok(msg) = rx.try_recv() {
-          let _ = client.send(&msg);
+          match msg {
+            TdlibCommand::Td(m) => {
+              let _ = client.send(&m);
+            }
+            TdlibCommand::SetConfig { api_id, api_hash } => {
+              match TdlibConfig::from_settings(&paths_for_thread, api_id, api_hash) {
+                Ok(cfg) => {
+                  config = Some(cfg);
+                  if waiting_for_params {
+                    if let Some(cfg) = config.as_ref() {
+                      let payload = build_tdlib_parameters(cfg);
+                      let _ = client.send(&payload);
+                      waiting_for_params = false;
+                    }
+                  }
+                }
+                Err(e) => {
+                  tracing::error!("Не удалось применить настройки TDLib: {e}");
+                }
+              }
+            }
+          }
         }
 
         if let Some(resp) = client.receive(0.1) {
-          if let Err(e) = handle_tdlib_response(&resp, &client, &config, &app_for_thread, &mut last_state) {
+          if let Err(e) = handle_tdlib_response(&resp, &client, &mut config, &mut waiting_for_params, &app_for_thread, &mut last_state) {
             tracing::error!("Ошибка TDLib: {e}");
           }
         }
@@ -176,7 +219,7 @@ impl TelegramService for TdlibTelegram {
     .to_string();
 
     self.tx
-      .send(payload)
+      .send(TdlibCommand::Td(payload))
       .map_err(|_| TgError::Other("TDLib поток не запущен".into()))?;
     Ok(())
   }
@@ -184,7 +227,7 @@ impl TelegramService for TdlibTelegram {
   async fn auth_submit_code(&self, code: String) -> Result<(), TgError> {
     let payload = json!({"@type":"checkAuthenticationCode","code":code}).to_string();
     self.tx
-      .send(payload)
+      .send(TdlibCommand::Td(payload))
       .map_err(|_| TgError::Other("TDLib поток не запущен".into()))?;
     Ok(())
   }
@@ -192,7 +235,14 @@ impl TelegramService for TdlibTelegram {
   async fn auth_submit_password(&self, password: String) -> Result<(), TgError> {
     let payload = json!({"@type":"checkAuthenticationPassword","password":password}).to_string();
     self.tx
-      .send(payload)
+      .send(TdlibCommand::Td(payload))
+      .map_err(|_| TgError::Other("TDLib поток не запущен".into()))?;
+    Ok(())
+  }
+
+  async fn configure(&self, api_id: i32, api_hash: String) -> Result<(), TgError> {
+    self.tx
+      .send(TdlibCommand::SetConfig { api_id, api_hash })
       .map_err(|_| TgError::Other("TDLib поток не запущен".into()))?;
     Ok(())
   }
@@ -245,7 +295,8 @@ fn resolve_tdlib_path(paths: &Paths) -> anyhow::Result<PathBuf> {
 fn handle_tdlib_response(
   raw: &str,
   client: &TdlibClient,
-  config: &TdlibConfig,
+  config: &mut Option<TdlibConfig>,
+  waiting_for_params: &mut bool,
   app: &tauri::AppHandle,
   last_state: &mut Option<AuthState>
 ) -> anyhow::Result<()> {
@@ -254,13 +305,13 @@ fn handle_tdlib_response(
 
   if t == "updateAuthorizationState" {
     if let Some(state) = v.get("authorization_state") {
-      handle_auth_state(state, client, config, app, last_state)?;
+      handle_auth_state(state, client, config, waiting_for_params, app, last_state)?;
     }
     return Ok(());
   }
 
   if t.starts_with("authorizationState") {
-    handle_auth_state(&v, client, config, app, last_state)?;
+    handle_auth_state(&v, client, config, waiting_for_params, app, last_state)?;
     return Ok(());
   }
 
@@ -275,7 +326,8 @@ fn handle_tdlib_response(
 fn handle_auth_state(
   state: &serde_json::Value,
   client: &TdlibClient,
-  config: &TdlibConfig,
+  config: &mut Option<TdlibConfig>,
+  waiting_for_params: &mut bool,
   app: &tauri::AppHandle,
   last_state: &mut Option<AuthState>
 ) -> anyhow::Result<()> {
@@ -283,27 +335,15 @@ fn handle_auth_state(
 
   match t {
     "authorizationStateWaitTdlibParameters" => {
-      let payload = json!({
-        "@type": "setTdlibParameters",
-        "use_test_dc": false,
-        "database_directory": path_to_str(&config.db_dir),
-        "files_directory": path_to_str(&config.files_dir),
-        "use_file_database": true,
-        "use_chat_info_database": true,
-        "use_message_database": true,
-        "use_secret_chats": false,
-        "api_id": config.api_id,
-        "api_hash": config.api_hash.clone(),
-        "system_language_code": "ru",
-        "device_model": "CloudTG",
-        "system_version": std::env::consts::OS,
-        "application_version": env!("CARGO_PKG_VERSION"),
-        "enable_storage_optimizer": true,
-        "ignore_file_names": false
-      })
-      .to_string();
-      let _ = client.send(&payload);
-      set_auth_state(app, AuthState::Unknown, last_state);
+      if let Some(cfg) = config.as_ref() {
+        let payload = build_tdlib_parameters(cfg);
+        let _ = client.send(&payload);
+        *waiting_for_params = false;
+        set_auth_state(app, AuthState::Unknown, last_state);
+      } else {
+        *waiting_for_params = true;
+        set_auth_state(app, AuthState::WaitConfig, last_state);
+      }
     }
     "authorizationStateWaitEncryptionKey" => {
       let payload = json!({"@type":"checkDatabaseEncryptionKey","encryption_key":""}).to_string();
@@ -361,12 +401,35 @@ struct AuthEvent {
 fn auth_state_to_str(state: &AuthState) -> &'static str {
   match state {
     AuthState::Unknown => "unknown",
+    AuthState::WaitConfig => "wait_config",
     AuthState::WaitPhone => "wait_phone",
     AuthState::WaitCode => "wait_code",
     AuthState::WaitPassword => "wait_password",
     AuthState::Ready => "ready",
     AuthState::Closed => "closed"
   }
+}
+
+fn build_tdlib_parameters(config: &TdlibConfig) -> String {
+  json!({
+    "@type": "setTdlibParameters",
+    "use_test_dc": false,
+    "database_directory": path_to_str(&config.db_dir),
+    "files_directory": path_to_str(&config.files_dir),
+    "use_file_database": true,
+    "use_chat_info_database": true,
+    "use_message_database": true,
+    "use_secret_chats": false,
+    "api_id": config.api_id,
+    "api_hash": config.api_hash.clone(),
+    "system_language_code": "ru",
+    "device_model": "CloudTG",
+    "system_version": std::env::consts::OS,
+    "application_version": env!("CARGO_PKG_VERSION"),
+    "enable_storage_optimizer": true,
+    "ignore_file_names": false
+  })
+  .to_string()
 }
 
 fn path_to_str(p: &Path) -> String {

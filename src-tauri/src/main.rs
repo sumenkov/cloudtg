@@ -16,7 +16,9 @@ fn main() {
       commands::auth_submit_password,
       commands::storage_get_or_create_channel,
       commands::dir_create,
-      commands::dir_list_tree
+      commands::dir_list_tree,
+      commands::settings_get_tg,
+      commands::settings_set_tg
     ])
     .setup(|app| {
       let state = app.state::<AppState>();

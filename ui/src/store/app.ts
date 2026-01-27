@@ -9,7 +9,7 @@ export type DirNode = {
 };
 
 type State = {
-  auth: "unknown" | "wait_phone" | "wait_code" | "wait_password" | "ready" | "closed";
+  auth: "unknown" | "wait_config" | "wait_phone" | "wait_code" | "wait_password" | "ready" | "closed";
   tree: DirNode | null;
   error: string | null;
 

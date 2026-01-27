@@ -20,6 +20,7 @@ struct Inner {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum AuthState {
   Unknown,
+  WaitConfig,
   WaitPhone,
   WaitCode,
   WaitPassword,
@@ -75,7 +76,8 @@ impl AppState {
     let db = Db::connect(paths.sqlite_path()).await?;
     db.migrate().await?;
 
-    let telegram = make_telegram_service(paths.clone(), app.clone())?;
+    let tg_settings = crate::settings::get_tg_settings(db.pool()).await?;
+    let telegram = make_telegram_service(paths.clone(), app.clone(), tg_settings)?;
 
     {
       let mut w = self.inner.write();
