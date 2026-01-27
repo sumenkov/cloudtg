@@ -139,6 +139,7 @@ impl TdlibTelegram {
     std::thread::spawn(move || {
       let mut last_state: Option<AuthState> = None;
       let mut waiting_for_params = false;
+      let mut params_sent = false;
       let mut client: Option<TdlibClient> = None;
       let mut pending: Vec<String> = Vec::new();
       let mut build_attempted = false;
@@ -157,6 +158,7 @@ impl TdlibTelegram {
               &mut lib_path,
               &mut client,
               &mut waiting_for_params,
+              &mut params_sent,
               &mut build_attempted,
               &mut pending,
               &app_for_thread,
@@ -175,6 +177,7 @@ impl TdlibTelegram {
             &mut lib_path,
             &mut client,
             &mut waiting_for_params,
+            &mut params_sent,
             &mut build_attempted,
             &mut pending,
             &app_for_thread,
@@ -205,6 +208,8 @@ impl TdlibTelegram {
                   let _ = c.send(&msg);
                 }
                 client = Some(c);
+                waiting_for_params = false;
+                params_sent = false;
               }
               Err(e) => {
                 tracing::error!("Не удалось загрузить TDLib: {e}");
@@ -216,7 +221,15 @@ impl TdlibTelegram {
 
         if let Some(c) = client.as_ref() {
           if let Some(resp) = c.receive(0.1) {
-            if let Err(e) = handle_tdlib_response(&resp, c, &mut config, &mut waiting_for_params, &app_for_thread, &mut last_state) {
+            if let Err(e) = handle_tdlib_response(
+              &resp,
+              c,
+              &mut config,
+              &mut waiting_for_params,
+              &mut params_sent,
+              &app_for_thread,
+              &mut last_state
+            ) {
               tracing::error!("Ошибка TDLib: {e}");
             }
           }
@@ -300,6 +313,7 @@ fn handle_command(
   lib_path: &mut Option<PathBuf>,
   client: &mut Option<TdlibClient>,
   waiting_for_params: &mut bool,
+  params_sent: &mut bool,
   build_attempted: &mut bool,
   pending: &mut Vec<String>,
   app: &tauri::AppHandle,
@@ -329,11 +343,14 @@ fn handle_command(
 
       if client.is_some() && *waiting_for_params {
         if let Some(cfg) = config.as_ref() {
-          let payload = build_tdlib_parameters(cfg);
-          if let Some(c) = client.as_ref() {
-            let _ = c.send(&payload);
+          if !*params_sent {
+            let payload = build_tdlib_parameters(cfg);
+            if let Some(c) = client.as_ref() {
+              let _ = c.send(&payload);
+            }
+            *params_sent = true;
+            *waiting_for_params = false;
           }
-          *waiting_for_params = false;
         }
       }
 
@@ -557,6 +574,7 @@ fn handle_tdlib_response(
   client: &TdlibClient,
   config: &mut Option<TdlibConfig>,
   waiting_for_params: &mut bool,
+  params_sent: &mut bool,
   app: &tauri::AppHandle,
   last_state: &mut Option<AuthState>
 ) -> anyhow::Result<()> {
@@ -565,13 +583,13 @@ fn handle_tdlib_response(
 
   if t == "updateAuthorizationState" {
     if let Some(state) = v.get("authorization_state") {
-      handle_auth_state(state, client, config, waiting_for_params, app, last_state)?;
+      handle_auth_state(state, client, config, waiting_for_params, params_sent, app, last_state)?;
     }
     return Ok(());
   }
 
   if t.starts_with("authorizationState") {
-    handle_auth_state(&v, client, config, waiting_for_params, app, last_state)?;
+    handle_auth_state(&v, client, config, waiting_for_params, params_sent, app, last_state)?;
     return Ok(());
   }
 
@@ -588,6 +606,7 @@ fn handle_auth_state(
   client: &TdlibClient,
   config: &mut Option<TdlibConfig>,
   waiting_for_params: &mut bool,
+  params_sent: &mut bool,
   app: &tauri::AppHandle,
   last_state: &mut Option<AuthState>
 ) -> anyhow::Result<()> {
@@ -595,9 +614,14 @@ fn handle_auth_state(
 
   match t {
     "authorizationStateWaitTdlibParameters" => {
+      if *params_sent {
+        tracing::debug!("TDLib уже получил параметры, пропускаю повторную отправку");
+        return Ok(());
+      }
       if let Some(cfg) = config.as_ref() {
         let payload = build_tdlib_parameters(cfg);
         let _ = client.send(&payload);
+        *params_sent = true;
         *waiting_for_params = false;
         set_auth_state(app, AuthState::Unknown, last_state);
       } else {
@@ -623,9 +647,11 @@ fn handle_auth_state(
       set_auth_state(app, AuthState::Ready, last_state);
     }
     "authorizationStateClosing" | "authorizationStateLoggingOut" => {
+      *params_sent = false;
       set_auth_state(app, AuthState::Unknown, last_state);
     }
     "authorizationStateClosed" => {
+      *params_sent = false;
       set_auth_state(app, AuthState::Closed, last_state);
     }
     "authorizationStateWaitRegistration" => {
