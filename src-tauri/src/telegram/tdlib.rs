@@ -345,28 +345,24 @@ fn attempt_tdlib_build(paths: &Paths) -> anyhow::Result<PathBuf> {
 
   let repo_dir = base.join("td");
   if !repo_dir.exists() {
-    run_command(
-      Command::new("git")
-        .arg("clone")
-        .arg("--depth")
-        .arg("1")
-        .arg("https://github.com/tdlib/td.git")
-        .arg(&repo_dir),
-      "git clone"
-    )?;
+    let mut cmd = Command::new("git");
+    cmd.arg("clone")
+      .arg("--depth")
+      .arg("1")
+      .arg("https://github.com/tdlib/td.git")
+      .arg(&repo_dir);
+    run_command(cmd, "git clone")?;
   }
 
   let build_dir = repo_dir.join("build");
   std::fs::create_dir_all(&build_dir)?;
 
   if !build_dir.join("CMakeCache.txt").exists() {
-    run_command(
-      Command::new("cmake")
-        .arg("-DCMAKE_BUILD_TYPE=Release")
-        .arg("..")
-        .current_dir(&build_dir),
-      "cmake configure"
-    )?;
+    let mut cmd = Command::new("cmake");
+    cmd.arg("-DCMAKE_BUILD_TYPE=Release")
+      .arg("..")
+      .current_dir(&build_dir);
+    run_command(cmd, "cmake configure")?;
   }
 
   let mut build_cmd = Command::new("cmake");
