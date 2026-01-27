@@ -8,7 +8,7 @@ use std::{
 
 use libloading::Library;
 use serde_json::json;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
@@ -353,7 +353,7 @@ fn set_auth_state(app: &tauri::AppHandle, state: AuthState, last_state: &mut Opt
   let _ = app.emit("auth_state_changed", payload);
 }
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 struct AuthEvent {
   state: String
 }
