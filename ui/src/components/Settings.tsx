@@ -139,8 +139,8 @@ export function Settings({ onClose }: { onClose?: () => void }) {
           <b>Сборка TDLib</b>
           <div style={{ marginTop: 6 }}>{tdlibBuild.message}</div>
           {isBuilding ? (
-            <div style={{ marginTop: 8, height: 8, background: "#e5e5e5", borderRadius: 999 }}>
-              <div style={{ width: "60%", height: "100%", background: "#4a90e2", borderRadius: 999 }} />
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+              Сборка идет. Прогресс отображается в главном окне.
             </div>
           ) : null}
           {isSuccess && tdlibBuild.detail ? (
