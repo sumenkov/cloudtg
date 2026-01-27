@@ -53,6 +53,10 @@ npm run tauri:dev
 - `./cache`
 - `./logs`
 
+## Логи
+Логи пишутся в папку `./logs` в формате **JSON Lines** (одна JSON‑строка на событие).
+Файл имеет вид `cloudtg.jsonl.YYYY-MM-DD` и подходит для последующего парсинга.
+
 ## Как получить API_ID и API_HASH Telegram
 1) Открой сайт `my.telegram.org` и войди по номеру телефона.
 2) Перейди в раздел **API development tools**.

@@ -684,6 +684,7 @@ fn emit_build(app: &tauri::AppHandle, state: &str, message: &str, detail: Option
     detail
   };
   let _ = app.emit("tdlib_build_status", payload);
+  tracing::info!(event = "tdlib_build_status", state = state, message = message, detail = detail.as_deref().unwrap_or(""), "TDLib");
 }
 
 fn emit_build_log(app: &tauri::AppHandle, stream: &str, line: &str) {
@@ -692,6 +693,7 @@ fn emit_build_log(app: &tauri::AppHandle, stream: &str, line: &str) {
     line: line.to_string()
   };
   let _ = app.emit("tdlib_build_log", payload);
+  tracing::debug!(event = "tdlib_build_log", stream = stream, line = line, "TDLib");
 }
 
 #[derive(Clone, serde::Serialize)]

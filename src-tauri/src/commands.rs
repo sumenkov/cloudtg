@@ -3,6 +3,7 @@ use tauri::State;
 use crate::state::{AppState, AuthState};
 use crate::app::{dirs, sync};
 use crate::settings;
+use tracing::info;
 
 #[derive(serde::Serialize)]
 pub struct AuthStatus { pub state: String }
@@ -39,6 +40,7 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, Strin
 
 #[tauri::command]
 pub async fn auth_start(state: State<'_, AppState>, phone: String) -> Result<(), String> {
+  info!(event = "auth_start", phone_masked = %mask_phone(&phone), "Запрос кода авторизации");
   let tg = state.telegram().map_err(map_err)?;
   tg.auth_start(phone).await.map_err(|e| e.to_string())?;
   Ok(())
@@ -46,6 +48,7 @@ pub async fn auth_start(state: State<'_, AppState>, phone: String) -> Result<(),
 
 #[tauri::command]
 pub async fn auth_submit_code(state: State<'_, AppState>, code: String) -> Result<(), String> {
+  info!(event = "auth_submit_code", code_len = code.len(), "Отправка кода авторизации");
   let tg = state.telegram().map_err(map_err)?;
   tg.auth_submit_code(code).await.map_err(|e| e.to_string())?;
   Ok(())
@@ -53,6 +56,7 @@ pub async fn auth_submit_code(state: State<'_, AppState>, code: String) -> Resul
 
 #[tauri::command]
 pub async fn auth_submit_password(state: State<'_, AppState>, password: String) -> Result<(), String> {
+  info!(event = "auth_submit_password", password_len = password.len(), "Отправка пароля 2FA");
   let tg = state.telegram().map_err(map_err)?;
   tg.auth_submit_password(password).await.map_err(|e| e.to_string())?;
   Ok(())
@@ -60,11 +64,13 @@ pub async fn auth_submit_password(state: State<'_, AppState>, password: String) 
 
 #[tauri::command]
 pub async fn storage_get_or_create_channel(state: State<'_, AppState>) -> Result<i64, String> {
+  info!(event = "storage_get_or_create_channel", "Запрос storage канала");
   ensure_storage_chat_id(&state).await.map_err(map_err)
 }
 
 #[tauri::command]
 pub async fn dir_create(state: State<'_, AppState>, parent_id: Option<String>, name: String) -> Result<String, String> {
+  info!(event = "dir_create", parent_id = parent_id.as_deref().unwrap_or("ROOT"), "Создание директории");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
   let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
@@ -79,6 +85,7 @@ pub async fn dir_list_tree(state: State<'_, AppState>) -> Result<crate::app::mod
 
 #[tauri::command]
 pub async fn settings_get_tg(state: State<'_, AppState>) -> Result<settings::TgSettingsView, String> {
+  info!(event = "settings_get_tg", "Чтение настроек Telegram");
   let db = state.db().map_err(map_err)?;
   settings::get_tg_settings_view(db.pool()).await.map_err(map_err)
 }
@@ -90,6 +97,13 @@ pub async fn settings_set_tg(
   api_hash: String,
   tdlib_path: Option<String>
 ) -> Result<(), String> {
+  info!(
+    event = "settings_set_tg",
+    api_id = api_id,
+    api_hash_len = api_hash.len(),
+    tdlib_path_present = tdlib_path.as_ref().map(|p| !p.is_empty()).unwrap_or(false),
+    "Сохранение настроек Telegram"
+  );
   if api_id <= 0 {
     return Err("API_ID должен быть положительным числом".into());
   }
@@ -113,5 +127,15 @@ pub async fn settings_set_tg(
   let tg = state.telegram().map_err(map_err)?;
   tg.configure(api_id, api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
   state.set_auth_state(AuthState::Unknown);
+  info!(event = "settings_set_tg_done", "Настройки Telegram сохранены");
   Ok(())
+}
+
+fn mask_phone(phone: &str) -> String {
+  let p = phone.trim();
+  if p.len() <= 4 {
+    return "***".to_string();
+  }
+  let tail = &p[p.len() - 4..];
+  format!("***{tail}")
 }

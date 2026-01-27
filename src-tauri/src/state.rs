@@ -72,13 +72,16 @@ impl AppState {
   async fn init(&self, app: AppHandle) -> anyhow::Result<()> {
     let paths = Paths::detect()?;
     paths.ensure_dirs()?;
+    tracing::info!(event = "init_paths", base_dir = %paths.base_dir.display(), "Пути приложения инициализированы");
 
     let db = Db::connect(paths.sqlite_path()).await?;
     db.migrate().await?;
+    tracing::info!(event = "init_db", db_path = %paths.sqlite_path().display(), "База данных подключена");
 
     let tg_settings = crate::settings::get_tg_settings(db.pool()).await?;
     let tdlib_path = crate::settings::get_tdlib_path(db.pool()).await?;
     let telegram = make_telegram_service(paths.clone(), app.clone(), tg_settings, tdlib_path)?;
+    tracing::info!(event = "init_telegram_service", "Telegram сервис инициализирован");
 
     {
       let mut w = self.inner.write();
