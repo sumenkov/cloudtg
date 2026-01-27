@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenSafe } from "../tauri";
 import { useAppStore } from "../store/app";
 import { FileManager } from "../components/FileManager";
 import { Login } from "../components/Login";
@@ -19,7 +19,7 @@ export default function App() {
           await refreshTree();
         }
 
-        unlisten = await listen<{ state: string }>("auth_state_changed", async (event) => {
+        unlisten = await listenSafe<{ state: string }>("auth_state_changed", async (event) => {
           setAuth(event.payload.state);
           if (event.payload.state === "ready") {
             await refreshTree();

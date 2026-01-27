@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeSafe } from "../tauri";
 import { useAppStore } from "../store/app";
 
 type TgSettingsView = {
@@ -18,7 +18,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
   useEffect(() => {
     (async () => {
       try {
-        const s = await invoke<TgSettingsView>("settings_get_tg");
+        const s = await invokeSafe<TgSettingsView>("settings_get_tg");
         if (s.api_id) setApiId(String(s.api_id));
         if (s.api_hash) setApiHash(s.api_hash);
         if (s.tdlib_path) setTdlibPath(s.tdlib_path);
@@ -84,7 +84,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
                 setStatus("API_HASH не может быть пустым");
                 return;
               }
-              await invoke("settings_set_tg", {
+              await invokeSafe("settings_set_tg", {
                 api_id: id,
                 api_hash: apiHash.trim(),
                 tdlib_path: tdlibPath.trim() ? tdlibPath.trim() : null

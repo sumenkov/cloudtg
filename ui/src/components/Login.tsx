@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeSafe } from "../tauri";
 import { useAppStore } from "../store/app";
 
 export function Login() {
@@ -40,7 +40,7 @@ export function Login() {
           <button
             onClick={async () => {
               try {
-                await invoke("auth_start", { phone });
+                await invokeSafe("auth_start", { phone });
                 await refreshAuth();
               } catch (e: any) {
                 setError(String(e));
@@ -67,7 +67,7 @@ export function Login() {
           <button
             onClick={async () => {
               try {
-                await invoke("auth_submit_code", { code });
+                await invokeSafe("auth_submit_code", { code });
                 await refreshAuth();
               } catch (e: any) {
                 setError(String(e));
@@ -95,7 +95,7 @@ export function Login() {
           <button
             onClick={async () => {
               try {
-                await invoke("auth_submit_password", { password });
+                await invokeSafe("auth_submit_password", { password });
                 await refreshAuth();
               } catch (e: any) {
                 setError(String(e));

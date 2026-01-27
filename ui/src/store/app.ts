@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeSafe } from "../tauri";
 
 export type DirNode = {
   id: string;
@@ -30,18 +30,18 @@ export const useAppStore = create<State>((set, get) => ({
   setError: (v) => set({ error: v }),
 
   refreshAuth: async () => {
-    const status = await invoke<{ state: string }>("auth_status");
+    const status = await invokeSafe<{ state: string }>("auth_status");
     set({ auth: status.state as any });
     return status.state;
   },
 
   refreshTree: async () => {
-    const t = await invoke<DirNode>("dir_list_tree");
+    const t = await invokeSafe<DirNode>("dir_list_tree");
     set({ tree: t });
   },
 
   createDir: async (parentId, name) => {
-    await invoke("dir_create", { parentId, name });
+    await invokeSafe("dir_create", { parentId, name });
     await get().refreshTree();
   }
 }));
