@@ -28,9 +28,14 @@ struct TdlibConfig {
 }
 
 impl TdlibConfig {
-  fn from_settings(paths: &Paths, api_id: i32, api_hash: String) -> anyhow::Result<Self> {
-    let db_dir = paths.data_dir.join("tdlib");
-    let files_dir = paths.cache_dir.join("tdlib_files");
+  fn from_settings(
+    paths: &Paths,
+    api_id: i32,
+    api_hash: String,
+    session_name: &str
+  ) -> anyhow::Result<Self> {
+    let db_dir = paths.data_dir.join("tdlib").join(session_name);
+    let files_dir = paths.cache_dir.join("tdlib_files").join(session_name);
     std::fs::create_dir_all(&db_dir)?;
     std::fs::create_dir_all(&files_dir)?;
 
@@ -134,6 +139,37 @@ fn storage_channel_title_legacy() -> &'static str {
   STORAGE_CHANNEL_TITLE_LEGACY
 }
 
+fn tdlib_session_name() -> String {
+  if let Ok(raw) = std::env::var("CLOUDTG_TDLIB_SESSION") {
+    let name = normalize_session_name(&raw);
+    if !name.is_empty() {
+      return name;
+    }
+  }
+  if cfg!(debug_assertions) {
+    "cloudtg-dev".to_string()
+  } else {
+    "cloudtg".to_string()
+  }
+}
+
+fn normalize_session_name(raw: &str) -> String {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return String::new();
+  }
+  trimmed
+    .chars()
+    .map(|c| {
+      if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+        c
+      } else {
+        '_'
+      }
+    })
+    .collect()
+}
+
 fn app_icon_bytes() -> &'static [u8] {
   include_bytes!("../../icons/icon.png")
 }
@@ -211,8 +247,9 @@ impl TdlibTelegram {
 
     let app_for_thread = app.clone();
     let paths_for_thread = paths.clone();
+    let session_name = tdlib_session_name();
     let mut config = match initial_settings {
-      Some(s) => Some(TdlibConfig::from_settings(&paths, s.api_id, s.api_hash)?),
+      Some(s) => Some(TdlibConfig::from_settings(&paths, s.api_id, s.api_hash, &session_name)?),
       None => None
     };
     let mut lib_path = resolve_tdlib_path(&paths, initial_tdlib_path.as_deref());
@@ -909,7 +946,8 @@ fn handle_command(
       }
     }
     TdlibCommand::SetConfig { api_id, api_hash, tdlib_path } => {
-      match TdlibConfig::from_settings(paths, api_id, api_hash) {
+      let session_name = tdlib_session_name();
+      match TdlibConfig::from_settings(paths, api_id, api_hash, &session_name) {
         Ok(cfg) => {
           *config = Some(cfg);
         }
