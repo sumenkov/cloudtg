@@ -16,6 +16,7 @@ pub async fn create_dir(
 ) -> anyhow::Result<String> {
   let id = Ulid::new().to_string();
   let updated_at = Utc::now().timestamp();
+  let parent_id = parent_id.filter(|p| !p.trim().is_empty() && p != "ROOT");
 
   sqlx::query("INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at) VALUES(?, ?, ?, NULL, ?)")
     .bind(&id)
@@ -49,9 +50,11 @@ pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
 
   let mut items: Vec<RowItem> = Vec::with_capacity(rows.len());
   for r in rows {
+    let raw_parent = r.try_get::<String,_>("parent_id").ok();
+    let parent_id = raw_parent.filter(|p| !p.trim().is_empty() && p != "ROOT");
     items.push(RowItem {
       id: r.get::<String,_>("id"),
-      parent_id: r.try_get::<String,_>("parent_id").ok(),
+      parent_id,
       name: r.get::<String,_>("name")
     });
   }

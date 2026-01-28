@@ -13,7 +13,7 @@ function flatten(node: DirNode | null): DirNode[] {
 }
 
 export function FileManager({ tree }: { tree: DirNode | null }) {
-  const { createDir } = useAppStore();
+  const { createDir, setError } = useAppStore();
   const nodes = useMemo(() => flatten(tree), [tree]);
   const [parentId, setParentId] = useState<string | null>(tree?.id ?? "ROOT");
   const [name, setName] = useState("");
@@ -54,8 +54,12 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
           <button
             onClick={async () => {
               if (!name.trim()) return;
-              await createDir(parentId === "ROOT" ? null : parentId, name.trim());
-              setName("");
+              try {
+                await createDir(parentId === "ROOT" ? null : parentId, name.trim());
+                setName("");
+              } catch (e: any) {
+                setError(String(e));
+              }
             }}
             style={{ padding: 10, borderRadius: 10 }}
           >

@@ -1,4 +1,5 @@
 use std::{
+  collections::HashMap,
   ffi::{CStr, CString},
   io::{BufRead, BufReader},
   os::raw::{c_char, c_double, c_int, c_void},
@@ -9,8 +10,9 @@ use std::{
 };
 
 use libloading::Library;
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
+use tokio::sync::oneshot;
 
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
@@ -116,7 +118,8 @@ pub struct TdlibTelegram {
 
 enum TdlibCommand {
   Td(String),
-  SetConfig { api_id: i32, api_hash: String, tdlib_path: Option<String> }
+  SetConfig { api_id: i32, api_hash: String, tdlib_path: Option<String> },
+  Request { payload: Value, respond_to: oneshot::Sender<anyhow::Result<Value>> }
 }
 
 impl TdlibTelegram {
@@ -143,6 +146,8 @@ impl TdlibTelegram {
       let mut client: Option<TdlibClient> = None;
       let mut pending: Vec<String> = Vec::new();
       let mut build_attempted = false;
+      let mut pending_requests: HashMap<u64, oneshot::Sender<anyhow::Result<Value>>> = HashMap::new();
+      let mut next_request_id: u64 = 1;
 
       if config.is_none() || lib_path.is_none() {
         set_auth_state(&app_for_thread, AuthState::WaitConfig, &mut last_state);
@@ -159,6 +164,8 @@ impl TdlibTelegram {
               &mut client,
               &mut waiting_for_params,
               &mut params_sent,
+              &mut pending_requests,
+              &mut next_request_id,
               &mut build_attempted,
               &mut pending,
               &app_for_thread,
@@ -178,6 +185,8 @@ impl TdlibTelegram {
             &mut client,
             &mut waiting_for_params,
             &mut params_sent,
+            &mut pending_requests,
+            &mut next_request_id,
             &mut build_attempted,
             &mut pending,
             &app_for_thread,
@@ -221,8 +230,18 @@ impl TdlibTelegram {
 
         if let Some(c) = client.as_ref() {
           if let Some(resp) = c.receive(0.1) {
+            let value: Value = match serde_json::from_str(&resp) {
+              Ok(v) => v,
+              Err(e) => {
+                tracing::error!("Не удалось распарсить ответ TDLib: {e}");
+                continue;
+              }
+            };
+            if handle_request_response(&value, &mut pending_requests) {
+              continue;
+            }
             if let Err(e) = handle_tdlib_response(
-              &resp,
+              &value,
               c,
               &mut config,
               &mut waiting_for_params,
@@ -242,6 +261,107 @@ impl TdlibTelegram {
     });
 
     Ok(Self { tx })
+  }
+
+  async fn request(&self, payload: Value, timeout: Duration) -> Result<Value, TgError> {
+    let (tx, rx) = oneshot::channel();
+    self
+      .tx
+      .send(TdlibCommand::Request { payload, respond_to: tx })
+      .map_err(|_| TgError::Other("TDLib поток не запущен".into()))?;
+
+    match tokio::time::timeout(timeout, rx).await {
+      Ok(Ok(Ok(v))) => Ok(v),
+      Ok(Ok(Err(e))) => Err(TgError::Other(e.to_string())),
+      Ok(Err(_)) => Err(TgError::Other("TDLib не вернул ответ".into())),
+      Err(_) => Err(TgError::Other("Таймаут ответа TDLib".into()))
+    }
+  }
+
+  async fn ensure_authorized(&self) -> Result<(), TgError> {
+    let state = self
+      .request(json!({"@type":"getAuthorizationState"}), Duration::from_secs(10))
+      .await?;
+    let t = state.get("@type").and_then(|v| v.as_str()).unwrap_or("");
+    if t != "authorizationStateReady" {
+      return Err(TgError::AuthRequired);
+    }
+    Ok(())
+  }
+
+  async fn find_cloudvault(&self) -> Result<Option<ChatId>, TgError> {
+    let mut chat_ids: Vec<ChatId> = Vec::new();
+
+    if let Ok(res) = self
+      .request(json!({"@type":"searchChats","query":"CloudVault","limit":20}), Duration::from_secs(10))
+      .await
+    {
+      if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
+        for id in list {
+          if let Some(v) = id.as_i64() {
+            chat_ids.push(v);
+          }
+        }
+      }
+    }
+
+    if chat_ids.is_empty() {
+      if let Ok(res) = self
+        .request(json!({"@type":"searchChatsOnServer","query":"CloudVault","limit":20}), Duration::from_secs(10))
+        .await
+      {
+        if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
+          for id in list {
+            if let Some(v) = id.as_i64() {
+              chat_ids.push(v);
+            }
+          }
+        }
+      }
+    }
+
+    for chat_id in chat_ids {
+      let chat = self
+        .request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10))
+        .await?;
+      let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("");
+      if title != "CloudVault" {
+        continue;
+      }
+      let chat_type = chat.get("type").and_then(|v| v.as_object());
+      let is_channel = chat_type
+        .and_then(|t| t.get("is_channel"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+      let type_name = chat_type
+        .and_then(|t| t.get("@type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+      if type_name == "chatTypeSupergroup" && is_channel {
+        return Ok(Some(chat_id));
+      }
+    }
+
+    Ok(None)
+  }
+
+  async fn create_cloudvault(&self) -> Result<ChatId, TgError> {
+    let chat = self
+      .request(
+        json!({
+          "@type":"createNewSupergroupChat",
+          "title":"CloudVault",
+          "is_channel":true,
+          "description":"Хранилище CloudTG"
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+    let chat_id = chat
+      .get("id")
+      .and_then(|v| v.as_i64())
+      .ok_or_else(|| TgError::Other("TDLib не вернул chat_id".into()))?;
+    Ok(chat_id)
   }
 }
 
@@ -289,11 +409,51 @@ impl TelegramService for TdlibTelegram {
   }
 
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError> {
-    Err(TgError::NotImplemented)
+    self.ensure_authorized().await?;
+    tracing::info!(event = "storage_get_or_create_channel", "Поиск канала CloudVault");
+
+    if let Some(id) = self.find_cloudvault().await? {
+      tracing::info!(event = "storage_cloudvault_found", chat_id = id, "Найден существующий CloudVault");
+      return Ok(id);
+    }
+
+    tracing::info!(event = "storage_cloudvault_create", "Создаю CloudVault");
+    let id = self.create_cloudvault().await?;
+    tracing::info!(event = "storage_cloudvault_created", chat_id = id, "CloudVault создан");
+    Ok(id)
   }
 
-  async fn send_dir_message(&self, _chat_id: ChatId, _text: String) -> Result<UploadedMessage, TgError> {
-    Err(TgError::NotImplemented)
+  async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "tdlib_send_dir_message", chat_id = chat_id, "Отправка сообщения директории");
+
+    let res = self
+      .request(
+        json!({
+          "@type":"sendMessage",
+          "chat_id": chat_id,
+          "input_message_content": {
+            "@type":"inputMessageText",
+            "text": { "@type":"formattedText", "text": text },
+            "disable_web_page_preview": true,
+            "clear_draft": false
+          }
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+
+    let msg_id = res
+      .get("id")
+      .and_then(|v| v.as_i64())
+      .ok_or_else(|| TgError::Other("TDLib не вернул message.id".into()))?;
+    let chat_id = res
+      .get("chat_id")
+      .and_then(|v| v.as_i64())
+      .unwrap_or(chat_id);
+
+    tracing::info!(event = "tdlib_send_dir_message_done", chat_id = chat_id, message_id = msg_id, "Сообщение директории отправлено");
+    Ok(UploadedMessage { chat_id, message_id: msg_id, caption_or_text: text })
   }
 
   async fn send_file(&self, _chat_id: ChatId, _path: std::path::PathBuf, _caption: String) -> Result<UploadedMessage, TgError> {
@@ -314,6 +474,8 @@ fn handle_command(
   client: &mut Option<TdlibClient>,
   waiting_for_params: &mut bool,
   params_sent: &mut bool,
+  pending_requests: &mut HashMap<u64, oneshot::Sender<anyhow::Result<Value>>>,
+  next_request_id: &mut u64,
   build_attempted: &mut bool,
   pending: &mut Vec<String>,
   app: &tauri::AppHandle,
@@ -356,6 +518,27 @@ fn handle_command(
 
       if client.is_none() && (config.is_none() || lib_path.is_none()) {
         set_auth_state(app, AuthState::WaitConfig, last_state);
+      }
+    }
+    TdlibCommand::Request { payload, respond_to } => {
+      if client.is_none() {
+        let _ = respond_to.send(Err(anyhow::anyhow!("TDLib еще не инициализирован")));
+        return;
+      }
+
+      let mut request = payload;
+      let Some(obj) = request.as_object_mut() else {
+        let _ = respond_to.send(Err(anyhow::anyhow!("Запрос к TDLib должен быть объектом")));
+        return;
+      };
+
+      let request_id = *next_request_id;
+      *next_request_id = next_request_id.wrapping_add(1).max(1);
+      obj.insert("@extra".to_string(), json!(request_id));
+
+      pending_requests.insert(request_id, respond_to);
+      if let Some(c) = client.as_ref() {
+        let _ = c.send(&request.to_string());
       }
     }
   }
@@ -601,7 +784,7 @@ fn tdlib_resource_candidates(resource_dir: &Path) -> Vec<PathBuf> {
 }
 
 fn handle_tdlib_response(
-  raw: &str,
+  v: &Value,
   client: &TdlibClient,
   config: &mut Option<TdlibConfig>,
   waiting_for_params: &mut bool,
@@ -609,7 +792,6 @@ fn handle_tdlib_response(
   app: &tauri::AppHandle,
   last_state: &mut Option<AuthState>
 ) -> anyhow::Result<()> {
-  let v: serde_json::Value = serde_json::from_str(raw)?;
   let t = v.get("@type").and_then(|v| v.as_str()).unwrap_or("");
 
   if t == "updateAuthorizationState" {
@@ -630,6 +812,38 @@ fn handle_tdlib_response(
   }
 
   Ok(())
+}
+
+fn handle_request_response(
+  v: &Value,
+  pending_requests: &mut HashMap<u64, oneshot::Sender<anyhow::Result<Value>>>
+) -> bool {
+  let Some(extra) = v.get("@extra") else {
+    return false;
+  };
+  let id = match extra {
+    Value::Number(n) => n.as_u64(),
+    Value::String(s) => s.parse::<u64>().ok(),
+    _ => None
+  };
+  let Some(id) = id else {
+    return false;
+  };
+  let Some(tx) = pending_requests.remove(&id) else {
+    return false;
+  };
+
+  if v.get("@type").and_then(|t| t.as_str()) == Some("error") {
+    let msg = v
+      .get("message")
+      .and_then(|m| m.as_str())
+      .unwrap_or("неизвестная ошибка")
+      .to_string();
+    let _ = tx.send(Err(anyhow::anyhow!(msg)));
+  } else {
+    let _ = tx.send(Ok(v.clone()));
+  }
+  true
 }
 
 fn handle_auth_state(

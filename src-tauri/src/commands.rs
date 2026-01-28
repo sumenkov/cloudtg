@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{Emitter, State, AppHandle};
 use std::path::{Path, PathBuf};
 
 use crate::state::{AppState, AuthState};
@@ -17,12 +17,22 @@ async fn ensure_storage_chat_id(state: &AppState) -> anyhow::Result<i64> {
   let pool = db.pool();
 
   if let Some(v) = sync::get_sync(pool, "storage_chat_id").await? {
-    if let Ok(id) = v.parse::<i64>() { return Ok(id); }
+    if let Ok(id) = v.parse::<i64>() {
+      if id == 777 {
+        info!(event = "storage_chat_id_invalid", value = v, "Обнаружен mock chat_id, пересоздаю");
+      } else {
+        info!(event = "storage_chat_id_cached", chat_id = id, "Использую сохраненный storage_chat_id");
+        return Ok(id);
+      }
+    } else {
+      info!(event = "storage_chat_id_invalid", value = v, "Некорректный storage_chat_id, пересоздаю");
+    }
   }
 
   let tg = state.telegram()?;
   let chat_id = tg.storage_get_or_create_channel().await?;
   sync::set_sync(pool, "storage_chat_id", &chat_id.to_string()).await?;
+  info!(event = "storage_chat_id_saved", chat_id = chat_id, "storage_chat_id сохранен");
   Ok(chat_id)
 }
 
@@ -71,12 +81,14 @@ pub async fn storage_get_or_create_channel(state: State<'_, AppState>) -> Result
 }
 
 #[tauri::command]
-pub async fn dir_create(state: State<'_, AppState>, parent_id: Option<String>, name: String) -> Result<String, String> {
+pub async fn dir_create(app: AppHandle, state: State<'_, AppState>, parent_id: Option<String>, name: String) -> Result<String, String> {
   info!(event = "dir_create", parent_id = parent_id.as_deref().unwrap_or("ROOT"), "Создание директории");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
   let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
-  dirs::create_dir(db.pool(), tg.as_ref(), chat_id, parent_id, name).await.map_err(map_err)
+  let id = dirs::create_dir(db.pool(), tg.as_ref(), chat_id, parent_id, name).await.map_err(map_err)?;
+  let _ = app.emit("tree_updated", ());
+  Ok(id)
 }
 
 #[tauri::command]

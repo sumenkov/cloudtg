@@ -33,9 +33,7 @@ export default function App() {
       try {
         const state = await refreshAuth();
         await refreshSettings();
-        if (state === "ready") {
-          await refreshTree();
-        }
+        await refreshTree();
 
         unlisteners.push(
           await listenSafe<{ state: string }>("auth_state_changed", async (event) => {
@@ -63,6 +61,12 @@ export default function App() {
           await listenSafe<{ stream: "stdout" | "stderr"; line: string }>("tdlib_build_log", async (event) => {
             touchTdlibBuildOnLog();
             pushTdlibLog(event.payload.stream, event.payload.line);
+          })
+        );
+
+        unlisteners.push(
+          await listenSafe("tree_updated", async () => {
+            await refreshTree();
           })
         );
       } catch (e: any) {
