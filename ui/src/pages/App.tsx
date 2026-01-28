@@ -52,7 +52,8 @@ export default function App() {
             setTdlibBuild({
               state: event.payload.state ?? null,
               message: event.payload.message ?? null,
-              detail: event.payload.detail ?? null
+              detail: event.payload.detail ?? null,
+              progress: null
             });
           })
         );

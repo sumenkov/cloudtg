@@ -1,11 +1,41 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::Manager;
 use cloudtg_lib::state::AppState;
 use cloudtg_lib::commands;
 
+static ICON_LOGGED: AtomicBool = AtomicBool::new(false);
+
+fn load_app_icon() -> Option<tauri::image::Image<'static>> {
+  let bytes = include_bytes!("../icons/icon.png");
+  match tauri::image::Image::from_bytes(bytes) {
+    Ok(img) => Some(img.to_owned()),
+    Err(e) => {
+      tracing::warn!("Не удалось загрузить иконку окна: {e}");
+      None
+    }
+  }
+}
+
+fn log_icon_applied_once() {
+  if !ICON_LOGGED.swap(true, Ordering::Relaxed) {
+    tracing::debug!("Иконка окна установлена");
+  }
+}
+
+fn apply_webview_icon(window: &tauri::WebviewWindow, icon: &tauri::image::Image<'static>) {
+  if let Err(e) = window.set_icon(icon.clone()) {
+    tracing::warn!("Не удалось установить иконку окна: {e}");
+  } else {
+    log_icon_applied_once();
+  }
+}
+
 fn main() {
   cloudtg_lib::logging::init();
+  let icon_for_setup = load_app_icon();
 
   tauri::Builder::default()
     .manage(AppState::new())
@@ -20,7 +50,12 @@ fn main() {
       commands::settings_get_tg,
       commands::settings_set_tg
     ])
-    .setup(|app| {
+    .setup(move |app| {
+      if let Some(icon) = icon_for_setup.clone() {
+        for (_, win) in app.webview_windows() {
+          apply_webview_icon(&win, &icon);
+        }
+      }
       let state = app.state::<AppState>();
       state.spawn_init(app.handle().clone());
       Ok(())
