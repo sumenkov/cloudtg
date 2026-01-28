@@ -1,10 +1,13 @@
 use tauri::{Emitter, State, AppHandle};
 use std::path::{Path, PathBuf};
+use sqlx::Row;
+use chrono::Utc;
 
 use crate::state::{AppState, AuthState};
 use crate::app::{dirs, sync};
 use crate::settings;
 use crate::paths::Paths;
+use crate::fsmeta::{DirMeta, make_dir_message};
 use tracing::info;
 
 #[derive(serde::Serialize)]
@@ -15,24 +18,39 @@ fn map_err(e: anyhow::Error) -> String { format!("{e:#}") }
 async fn ensure_storage_chat_id(state: &AppState) -> anyhow::Result<i64> {
   let db = state.db()?;
   let pool = db.pool();
+  let tg = state.telegram()?;
+  let mut previous_id: Option<i64> = None;
 
   if let Some(v) = sync::get_sync(pool, "storage_chat_id").await? {
     if let Ok(id) = v.parse::<i64>() {
       if id == 777 {
         info!(event = "storage_chat_id_invalid", value = v, "Обнаружен mock chat_id, пересоздаю");
       } else {
-        info!(event = "storage_chat_id_cached", chat_id = id, "Использую сохраненный storage_chat_id");
-        return Ok(id);
+        previous_id = Some(id);
       }
     } else {
       info!(event = "storage_chat_id_invalid", value = v, "Некорректный storage_chat_id, пересоздаю");
     }
   }
 
-  let tg = state.telegram()?;
+  if let Some(id) = previous_id {
+    if tg.storage_check_channel(id).await.unwrap_or(false) {
+      info!(event = "storage_chat_id_cached", chat_id = id, "Использую сохраненный storage_chat_id");
+      return Ok(id);
+    }
+    info!(event = "storage_chat_id_invalid", chat_id = id, "Канал хранения недоступен, создаю новый");
+  }
+
   let chat_id = tg.storage_get_or_create_channel().await?;
   sync::set_sync(pool, "storage_chat_id", &chat_id.to_string()).await?;
   info!(event = "storage_chat_id_saved", chat_id = chat_id, "storage_chat_id сохранен");
+
+  if previous_id.filter(|id| *id != chat_id).is_some() || previous_id.is_none() {
+    if let Err(e) = reseed_storage_channel(pool, tg.as_ref(), previous_id, chat_id).await {
+      tracing::error!(event = "storage_channel_reseed_failed", error = %e, "Не удалось пересоздать содержимое канала");
+    }
+  }
+
   Ok(chat_id)
 }
 
@@ -98,6 +116,40 @@ pub async fn dir_list_tree(state: State<'_, AppState>) -> Result<crate::app::mod
 }
 
 #[tauri::command]
+pub async fn tg_test_message(state: State<'_, AppState>) -> Result<(), String> {
+  info!(event = "tg_test_message", "Проверка связи с Telegram");
+  let tg = state.telegram().map_err(map_err)?;
+  let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+  let ts = Utc::now().to_rfc3339();
+  let text = format!("CloudTG: тестовое сообщение ({ts})");
+  tg.send_text_message(chat_id, text).await.map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn tg_create_channel(state: State<'_, AppState>) -> Result<(), String> {
+  info!(event = "tg_create_channel", "Создание нового канала хранения");
+  let db = state.db().map_err(map_err)?;
+  let pool = db.pool();
+  let old_id = sync::get_sync(pool, "storage_chat_id")
+    .await
+    .map_err(map_err)?
+    .and_then(|v| v.parse::<i64>().ok())
+    .filter(|id| *id != 777);
+
+  let tg = state.telegram().map_err(map_err)?;
+  let new_id = tg.storage_create_channel().await.map_err(|e| e.to_string())?;
+  sync::set_sync(pool, "storage_chat_id", &new_id.to_string()).await.map_err(map_err)?;
+
+  if let Err(e) = reseed_storage_channel(pool, tg.as_ref(), old_id, new_id).await {
+    tracing::error!(event = "storage_channel_reseed_failed", error = %e, "Не удалось пересоздать содержимое канала");
+    return Err(format!("Не удалось перенести данные: {e}"));
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
 pub async fn settings_get_tg(state: State<'_, AppState>) -> Result<settings::TgSettingsView, String> {
   info!(event = "settings_get_tg", "Чтение настроек Telegram");
   let db = state.db().map_err(map_err)?;
@@ -148,6 +200,127 @@ pub async fn settings_set_tg(
   tg.configure(api_id, api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
   state.set_auth_state(AuthState::Unknown);
   info!(event = "settings_set_tg_done", "Настройки Telegram сохранены");
+  Ok(())
+}
+
+async fn reseed_storage_channel(
+  pool: &sqlx::SqlitePool,
+  tg: &dyn crate::telegram::TelegramService,
+  old_chat_id: Option<i64>,
+  new_chat_id: i64
+) -> anyhow::Result<()> {
+  info!(event = "storage_channel_reseed_start", old_chat_id = old_chat_id.unwrap_or(0), new_chat_id = new_chat_id, "Пересоздание содержимого канала");
+
+  let now = Utc::now().timestamp();
+  let dir_rows = sqlx::query("SELECT id, parent_id, name FROM directories ORDER BY name")
+    .fetch_all(pool)
+    .await?;
+
+  for r in dir_rows {
+    let id: String = r.get("id");
+    let name: String = r.get("name");
+    let raw_parent = r.try_get::<String,_>("parent_id").ok();
+    let parent_id = raw_parent.filter(|p| !p.trim().is_empty() && p != "ROOT").unwrap_or_else(|| "ROOT".to_string());
+    let msg = make_dir_message(&DirMeta { dir_id: id.clone(), parent_id, name });
+    let uploaded = tg.send_dir_message(new_chat_id, msg).await?;
+    sqlx::query("UPDATE directories SET tg_msg_id = ?, updated_at = ? WHERE id = ?")
+      .bind(uploaded.message_id)
+      .bind(now)
+      .bind(&id)
+      .execute(pool)
+      .await?;
+  }
+
+  let file_rows = sqlx::query("SELECT id, tg_chat_id, tg_msg_id FROM files ORDER BY tg_chat_id, tg_msg_id")
+    .fetch_all(pool)
+    .await?;
+
+  let mut current_chat: Option<i64> = None;
+  let mut batch: Vec<(String, i64)> = Vec::new();
+
+  for r in file_rows {
+    let file_id: String = r.get("id");
+    let chat_id: i64 = r.get("tg_chat_id");
+    let msg_id: i64 = r.get("tg_msg_id");
+    if current_chat.is_none() {
+      current_chat = Some(chat_id);
+    }
+    if current_chat != Some(chat_id) {
+      if let Some(c) = current_chat {
+        flush_file_batch(pool, tg, old_chat_id, new_chat_id, c, &mut batch).await?;
+      }
+      current_chat = Some(chat_id);
+    }
+    batch.push((file_id, msg_id));
+  }
+  if let Some(c) = current_chat {
+    flush_file_batch(pool, tg, old_chat_id, new_chat_id, c, &mut batch).await?;
+  }
+
+  info!(event = "storage_channel_reseed_done", "Пересоздание содержимого канала завершено");
+  Ok(())
+}
+
+async fn flush_file_batch(
+  pool: &sqlx::SqlitePool,
+  tg: &dyn crate::telegram::TelegramService,
+  old_chat_id: Option<i64>,
+  new_chat_id: i64,
+  chat_id: i64,
+  items: &mut Vec<(String, i64)>
+) -> anyhow::Result<()> {
+  if items.is_empty() {
+    return Ok(());
+  }
+  if chat_id == new_chat_id {
+    items.clear();
+    return Ok(());
+  }
+  if let Some(old) = old_chat_id {
+    if chat_id != old {
+      tracing::warn!(event = "storage_channel_reseed_skip", chat_id = chat_id, "Файлы относятся к другому каналу, пропускаю");
+      items.clear();
+      return Ok(());
+    }
+  }
+
+  let mut start = 0;
+  while start < items.len() {
+    let end = (start + 100).min(items.len());
+    let chunk = &items[start..end];
+    let ids: Vec<i64> = chunk.iter().map(|(_, msg_id)| *msg_id).collect();
+    let copied = tg.copy_messages(chat_id, new_chat_id, ids).await?;
+    if copied.len() != chunk.len() {
+      tracing::warn!(
+        event = "storage_channel_reseed_copy_mismatch",
+        expected = chunk.len(),
+        got = copied.len(),
+        "TDLib вернул неожиданное число сообщений при копировании"
+      );
+    }
+    for (idx, result) in copied.into_iter().enumerate().take(chunk.len()) {
+      if let Some(new_id) = result {
+        let file_id = &chunk[idx].0;
+        sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+          .bind(new_chat_id)
+          .bind(new_id)
+          .bind(file_id)
+          .execute(pool)
+          .await?;
+      } else {
+        let file_id = &chunk[idx].0;
+        tracing::warn!(
+          event = "storage_channel_reseed_file_failed",
+          old_chat_id = chat_id,
+          file_id = file_id,
+          "Не удалось скопировать файл в новый канал"
+        );
+      }
+    }
+    start = end;
+  }
+
+  items.clear();
   Ok(())
 }
 

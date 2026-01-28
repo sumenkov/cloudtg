@@ -31,10 +31,15 @@ pub trait TelegramService: Send + Sync {
   async fn auth_submit_password(&self, password: String) -> Result<(), TgError>;
   async fn configure(&self, api_id: i32, api_hash: String, tdlib_path: Option<String>) -> Result<(), TgError>;
 
+  async fn storage_check_channel(&self, chat_id: ChatId) -> Result<bool, TgError>;
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError>;
+  async fn storage_create_channel(&self) -> Result<ChatId, TgError>;
 
+  async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
   async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
   async fn send_file(&self, chat_id: ChatId, path: std::path::PathBuf, caption: String) -> Result<UploadedMessage, TgError>;
+  async fn copy_messages(&self, from_chat_id: ChatId, to_chat_id: ChatId, message_ids: Vec<MessageId>)
+    -> Result<Vec<Option<MessageId>>, TgError>;
 
   async fn download_message_file(&self, chat_id: ChatId, message_id: MessageId, target: std::path::PathBuf) -> Result<std::path::PathBuf, TgError>;
 }

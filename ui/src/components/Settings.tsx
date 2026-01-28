@@ -15,6 +15,8 @@ export function Settings({ onClose }: { onClose?: () => void }) {
   const [tdlibPath, setTdlibPath] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [creating, setCreating] = useState(false);
   const buildState = tdlibBuild.state;
   const isBuilding = buildState === "start" || buildState === "clone" || buildState === "configure" || buildState === "build";
   const isError = buildState === "error";
@@ -77,7 +79,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
         </div>
       </label>
 
-      <div style={{ display: "flex", gap: 10 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button
           onClick={async () => {
             try {
@@ -119,6 +121,50 @@ export function Settings({ onClose }: { onClose?: () => void }) {
             Закрыть
           </button>
         ) : null}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button
+          onClick={async () => {
+            try {
+              setTesting(true);
+              setStatus("Отправляю тестовое сообщение...");
+              await invokeSafe("tg_test_message");
+              setStatus("Тестовое сообщение отправлено. Проверь канал CloudTG.");
+            } catch (e: any) {
+              setStatus("Не удалось отправить тестовое сообщение");
+              setError(String(e));
+            } finally {
+              setTesting(false);
+            }
+          }}
+          disabled={testing}
+          style={{ padding: 10, borderRadius: 10, opacity: testing ? 0.6 : 1 }}
+        >
+          Проверить связь с Telegram
+        </button>
+        <button
+          onClick={async () => {
+            if (!window.confirm("Создать новый канал и перенести туда данные из базы?")) {
+              return;
+            }
+            try {
+              setCreating(true);
+              setStatus("Создаю новый канал и переношу данные...");
+              await invokeSafe("tg_create_channel");
+              setStatus("Канал создан. Данные перенесены. Проверь новый канал CloudTG.");
+            } catch (e: any) {
+              setStatus("Не удалось создать новый канал");
+              setError(String(e));
+            } finally {
+              setCreating(false);
+            }
+          }}
+          disabled={creating}
+          style={{ padding: 10, borderRadius: 10, opacity: creating ? 0.6 : 1 }}
+        >
+          Создать канал в Telegram
+        </button>
       </div>
 
       {status ? (

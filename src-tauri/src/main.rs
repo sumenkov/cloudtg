@@ -47,6 +47,8 @@ fn main() {
       commands::storage_get_or_create_channel,
       commands::dir_create,
       commands::dir_list_tree,
+      commands::tg_test_message,
+      commands::tg_create_channel,
       commands::settings_get_tg,
       commands::settings_set_tg
     ])

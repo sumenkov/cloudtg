@@ -113,13 +113,29 @@ impl TdlibClient {
 }
 
 pub struct TdlibTelegram {
-  tx: mpsc::Sender<TdlibCommand>
+  tx: mpsc::Sender<TdlibCommand>,
+  paths: Paths
 }
 
 enum TdlibCommand {
   Td(String),
   SetConfig { api_id: i32, api_hash: String, tdlib_path: Option<String> },
   Request { payload: Value, respond_to: oneshot::Sender<anyhow::Result<Value>> }
+}
+
+const STORAGE_CHANNEL_TITLE: &str = "CloudTG";
+const STORAGE_CHANNEL_TITLE_LEGACY: &str = "CloudVault";
+
+fn storage_channel_title() -> &'static str {
+  STORAGE_CHANNEL_TITLE
+}
+
+fn storage_channel_title_legacy() -> &'static str {
+  STORAGE_CHANNEL_TITLE_LEGACY
+}
+
+fn app_icon_bytes() -> &'static [u8] {
+  include_bytes!("../../icons/icon.png")
 }
 
 impl TdlibTelegram {
@@ -260,7 +276,7 @@ impl TdlibTelegram {
       }
     });
 
-    Ok(Self { tx })
+    Ok(Self { tx, paths })
   }
 
   async fn request(&self, payload: Value, timeout: Duration) -> Result<Value, TgError> {
@@ -289,45 +305,69 @@ impl TdlibTelegram {
     Ok(())
   }
 
-  async fn find_cloudvault(&self) -> Result<Option<ChatId>, TgError> {
+  async fn is_supergroup_usable(&self, supergroup_id: i64) -> Result<bool, TgError> {
+    if supergroup_id == 0 {
+      return Ok(false);
+    }
+    let sg = self
+      .request(json!({"@type":"getSupergroup","supergroup_id":supergroup_id}), Duration::from_secs(10))
+      .await?;
+    let status = sg
+      .get("status")
+      .and_then(|v| v.get("@type"))
+      .and_then(|v| v.as_str())
+      .unwrap_or("");
+    if status == "chatMemberStatusLeft" || status == "chatMemberStatusBanned" {
+      return Ok(false);
+    }
+    Ok(true)
+  }
+
+  async fn find_storage_channel(&self) -> Result<Option<ChatId>, TgError> {
     let mut chat_ids: Vec<ChatId> = Vec::new();
 
-    if let Ok(res) = self
-      .request(json!({"@type":"searchChats","query":"CloudVault","limit":20}), Duration::from_secs(10))
-      .await
-    {
-      if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
-        for id in list {
-          if let Some(v) = id.as_i64() {
-            chat_ids.push(v);
-          }
-        }
-      }
-    }
-
-    if chat_ids.is_empty() {
+    for title in [storage_channel_title(), storage_channel_title_legacy()] {
       if let Ok(res) = self
-        .request(json!({"@type":"searchChatsOnServer","query":"CloudVault","limit":20}), Duration::from_secs(10))
+        .request(json!({"@type":"searchChats","query":title,"limit":20}), Duration::from_secs(10))
         .await
       {
         if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
           for id in list {
             if let Some(v) = id.as_i64() {
-              chat_ids.push(v);
+              if !chat_ids.contains(&v) {
+                chat_ids.push(v);
+              }
             }
           }
         }
       }
     }
 
+    if chat_ids.is_empty() {
+      for title in [storage_channel_title(), storage_channel_title_legacy()] {
+        if let Ok(res) = self
+          .request(json!({"@type":"searchChatsOnServer","query":title,"limit":20}), Duration::from_secs(10))
+          .await
+        {
+          if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
+            for id in list {
+              if let Some(v) = id.as_i64() {
+                if !chat_ids.contains(&v) {
+                  chat_ids.push(v);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    let mut fallback: Option<ChatId> = None;
     for chat_id in chat_ids {
       let chat = self
         .request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10))
         .await?;
       let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("");
-      if title != "CloudVault" {
-        continue;
-      }
       let chat_type = chat.get("type").and_then(|v| v.as_object());
       let is_channel = chat_type
         .and_then(|t| t.get("is_channel"))
@@ -338,19 +378,42 @@ impl TdlibTelegram {
         .and_then(|v| v.as_str())
         .unwrap_or("");
       if type_name == "chatTypeSupergroup" && is_channel {
-        return Ok(Some(chat_id));
+        let supergroup_id = chat_type
+          .and_then(|t| t.get("supergroup_id"))
+          .and_then(|v| v.as_i64())
+          .unwrap_or(0);
+        if !self.is_supergroup_usable(supergroup_id).await? {
+          tracing::warn!(event = "storage_channel_unusable", chat_id = chat_id, "Канал хранения недоступен, пропускаю");
+          let _ = self
+            .request(
+              json!({"@type":"deleteChatHistory","chat_id":chat_id,"remove_from_chat_list":true,"revoke":true}),
+              Duration::from_secs(10)
+            )
+            .await;
+          let _ = self
+            .request(json!({"@type":"leaveChat","chat_id":chat_id}), Duration::from_secs(10))
+            .await;
+          continue;
+        }
+
+        if title == storage_channel_title() {
+          return Ok(Some(chat_id));
+        }
+        if title == storage_channel_title_legacy() {
+          fallback = Some(chat_id);
+        }
       }
     }
 
-    Ok(None)
+    Ok(fallback)
   }
 
-  async fn create_cloudvault(&self) -> Result<ChatId, TgError> {
+  async fn create_storage_channel(&self) -> Result<ChatId, TgError> {
     let chat = self
       .request(
         json!({
           "@type":"createNewSupergroupChat",
-          "title":"CloudVault",
+          "title": storage_channel_title(),
           "is_channel":true,
           "description":"Хранилище CloudTG"
         }),
@@ -362,6 +425,81 @@ impl TdlibTelegram {
       .and_then(|v| v.as_i64())
       .ok_or_else(|| TgError::Other("TDLib не вернул chat_id".into()))?;
     Ok(chat_id)
+  }
+
+  fn ensure_icon_file(&self) -> Result<PathBuf, TgError> {
+    let icon_path = self.paths.cache_dir.join("cloudtg-icon.png");
+    let bytes = app_icon_bytes();
+    if let Ok(existing) = std::fs::read(&icon_path) {
+      if existing == bytes {
+        return Ok(icon_path);
+      }
+    }
+    if let Some(parent) = icon_path.parent() {
+      std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&icon_path, bytes)?;
+    Ok(icon_path)
+  }
+
+  async fn ensure_storage_channel_config(&self, chat_id: ChatId) -> Result<(), TgError> {
+    let chat = self
+      .request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10))
+      .await?;
+    let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    if title != storage_channel_title() {
+      let _ = self
+        .request(
+          json!({"@type":"setChatTitle","chat_id":chat_id,"title":storage_channel_title()}),
+          Duration::from_secs(10)
+        )
+        .await?;
+      tracing::info!(event = "storage_channel_title_updated", chat_id = chat_id, "Название канала обновлено");
+    }
+
+    if let Ok(icon_path) = self.ensure_icon_file() {
+      let path_str = icon_path.to_string_lossy().to_string();
+      let _ = self
+        .request(
+          json!({
+            "@type":"setChatPhoto",
+            "chat_id": chat_id,
+            "photo": {
+              "@type":"inputChatPhotoStatic",
+              "photo": { "@type":"inputFileLocal", "path": path_str }
+            }
+          }),
+          Duration::from_secs(20)
+        )
+        .await?;
+      tracing::info!(event = "storage_channel_photo_updated", chat_id = chat_id, "Иконка канала обновлена");
+    }
+
+    let _ = self
+      .request(
+        json!({
+          "@type":"setChatNotificationSettings",
+          "chat_id": chat_id,
+          "notification_settings": {
+            "@type":"chatNotificationSettings",
+            "use_default_mute_for": false,
+            "mute_for": 0,
+            "use_default_sound": true,
+            "sound_id": 0,
+            "use_default_show_preview": true,
+            "show_preview": true,
+            "use_default_disable_pinned_message_notifications": true,
+            "disable_pinned_message_notifications": false,
+            "use_default_disable_mention_notifications": true,
+            "disable_mention_notifications": false
+          }
+        }),
+        Duration::from_secs(10)
+      )
+      .await?;
+    tracing::info!(event = "storage_channel_notifications_enabled", chat_id = chat_id, "Уведомления канала включены");
+
+    Ok(())
   }
 }
 
@@ -408,19 +546,96 @@ impl TelegramService for TdlibTelegram {
     Ok(())
   }
 
+  async fn storage_check_channel(&self, chat_id: ChatId) -> Result<bool, TgError> {
+    self.ensure_authorized().await?;
+    let chat = self
+      .request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10))
+      .await?;
+    let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    if title != storage_channel_title() && title != storage_channel_title_legacy() {
+      return Ok(false);
+    }
+    let chat_type = chat.get("type").and_then(|v| v.as_object());
+    let is_channel = chat_type
+      .and_then(|t| t.get("is_channel"))
+      .and_then(|v| v.as_bool())
+      .unwrap_or(false);
+    let type_name = chat_type
+      .and_then(|t| t.get("@type"))
+      .and_then(|v| v.as_str())
+      .unwrap_or("");
+    if type_name != "chatTypeSupergroup" || !is_channel {
+      return Ok(false);
+    }
+    let supergroup_id = chat_type
+      .and_then(|t| t.get("supergroup_id"))
+      .and_then(|v| v.as_i64())
+      .unwrap_or(0);
+    self.is_supergroup_usable(supergroup_id).await
+  }
+
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError> {
     self.ensure_authorized().await?;
-    tracing::info!(event = "storage_get_or_create_channel", "Поиск канала CloudVault");
+    tracing::info!(event = "storage_get_or_create_channel", "Поиск канала хранения");
 
-    if let Some(id) = self.find_cloudvault().await? {
-      tracing::info!(event = "storage_cloudvault_found", chat_id = id, "Найден существующий CloudVault");
-      return Ok(id);
+    let chat_id = if let Some(id) = self.find_storage_channel().await? {
+      tracing::info!(event = "storage_channel_found", chat_id = id, "Найден существующий канал хранения");
+      id
+    } else {
+      tracing::info!(event = "storage_channel_create", "Создаю канал хранения");
+      let id = self.create_storage_channel().await?;
+      tracing::info!(event = "storage_channel_created", chat_id = id, "Канал хранения создан");
+      id
+    };
+
+    if let Err(e) = self.ensure_storage_channel_config(chat_id).await {
+      tracing::warn!(event = "storage_channel_config_failed", chat_id = chat_id, error = %e, "Не удалось обновить настройки канала");
     }
 
-    tracing::info!(event = "storage_cloudvault_create", "Создаю CloudVault");
-    let id = self.create_cloudvault().await?;
-    tracing::info!(event = "storage_cloudvault_created", chat_id = id, "CloudVault создан");
-    Ok(id)
+    Ok(chat_id)
+  }
+
+  async fn storage_create_channel(&self) -> Result<ChatId, TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "storage_channel_create_manual", "Создаю новый канал хранения по запросу");
+    let chat_id = self.create_storage_channel().await?;
+    if let Err(e) = self.ensure_storage_channel_config(chat_id).await {
+      tracing::warn!(event = "storage_channel_config_failed", chat_id = chat_id, error = %e, "Не удалось обновить настройки канала");
+    }
+    Ok(chat_id)
+  }
+
+  async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "tdlib_send_text_message", chat_id = chat_id, "Отправка тестового сообщения");
+
+    let res = self
+      .request(
+        json!({
+          "@type":"sendMessage",
+          "chat_id": chat_id,
+          "input_message_content": {
+            "@type":"inputMessageText",
+            "text": { "@type":"formattedText", "text": text },
+            "disable_web_page_preview": true,
+            "clear_draft": false
+          }
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+
+    let msg_id = res
+      .get("id")
+      .and_then(|v| v.as_i64())
+      .ok_or_else(|| TgError::Other("TDLib не вернул message.id".into()))?;
+    let chat_id = res
+      .get("chat_id")
+      .and_then(|v| v.as_i64())
+      .unwrap_or(chat_id);
+
+    tracing::info!(event = "tdlib_send_text_message_done", chat_id = chat_id, message_id = msg_id, "Тестовое сообщение отправлено");
+    Ok(UploadedMessage { chat_id, message_id: msg_id, caption_or_text: text })
   }
 
   async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
@@ -458,6 +673,50 @@ impl TelegramService for TdlibTelegram {
 
   async fn send_file(&self, _chat_id: ChatId, _path: std::path::PathBuf, _caption: String) -> Result<UploadedMessage, TgError> {
     Err(TgError::NotImplemented)
+  }
+
+  async fn copy_messages(
+    &self,
+    from_chat_id: ChatId,
+    to_chat_id: ChatId,
+    message_ids: Vec<MessageId>
+  ) -> Result<Vec<Option<MessageId>>, TgError> {
+    self.ensure_authorized().await?;
+    if message_ids.is_empty() {
+      return Ok(Vec::new());
+    }
+    let res = self
+      .request(
+        json!({
+          "@type":"forwardMessages",
+          "chat_id": to_chat_id,
+          "from_chat_id": from_chat_id,
+          "message_ids": message_ids,
+          "send_copy": true,
+          "remove_caption": false,
+          "options": {
+            "@type": "messageSendOptions",
+            "disable_notification": false,
+            "from_background": false,
+            "protect_content": false
+          }
+        }),
+        Duration::from_secs(30)
+      )
+      .await?;
+    let mut out = Vec::new();
+    if let Some(list) = res.get("messages").and_then(|v| v.as_array()) {
+      for m in list {
+        if m.is_null() {
+          out.push(None);
+        } else {
+          let id = m.get("id").and_then(|v| v.as_i64());
+          out.push(id);
+        }
+      }
+      return Ok(out);
+    }
+    Err(TgError::Other("TDLib не вернул список сообщений при копировании".into()))
   }
 
   async fn download_message_file(&self, _chat_id: ChatId, _message_id: MessageId, _target: std::path::PathBuf)

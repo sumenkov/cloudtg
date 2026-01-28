@@ -8,7 +8,7 @@ use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage};
 pub struct MockTelegram {
   paths: Paths,
   _app: tauri::AppHandle,
-  chat_id: ChatId,
+  chat_id: Mutex<ChatId>,
   next_msg_id: Mutex<MessageId>,
   messages: Mutex<VecDeque<UploadedMessage>>,
   authed: Mutex<bool>
@@ -19,7 +19,7 @@ impl MockTelegram {
     Self {
       paths,
       _app: app,
-      chat_id: 777,
+      chat_id: Mutex::new(777),
       next_msg_id: Mutex::new(1),
       messages: Mutex::new(VecDeque::new()),
       authed: Mutex::new(true)
@@ -41,9 +41,26 @@ impl TelegramService for MockTelegram {
   async fn auth_submit_password(&self, _password: String) -> Result<(), TgError> { *self.authed.lock() = true; Ok(()) }
   async fn configure(&self, _api_id: i32, _api_hash: String, _tdlib_path: Option<String>) -> Result<(), TgError> { Ok(()) }
 
+  async fn storage_check_channel(&self, _chat_id: ChatId) -> Result<bool, TgError> {
+    Ok(*self.authed.lock())
+  }
+
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError> {
     if !*self.authed.lock() { return Err(TgError::AuthRequired); }
-    Ok(self.chat_id)
+    Ok(*self.chat_id.lock())
+  }
+
+  async fn storage_create_channel(&self) -> Result<ChatId, TgError> {
+    if !*self.authed.lock() { return Err(TgError::AuthRequired); }
+    let mut guard = self.chat_id.lock();
+    *guard += 1;
+    Ok(*guard)
+  }
+
+  async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
+    let msg = UploadedMessage { chat_id, message_id: self.alloc_msg_id(), caption_or_text: text };
+    self.messages.lock().push_back(msg.clone());
+    Ok(msg)
   }
 
   async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
@@ -62,6 +79,21 @@ impl TelegramService for MockTelegram {
     let msg = UploadedMessage { chat_id, message_id: self.alloc_msg_id(), caption_or_text: caption };
     self.messages.lock().push_back(msg.clone());
     Ok(msg)
+  }
+
+  async fn copy_messages(
+    &self,
+    _from_chat_id: ChatId,
+    to_chat_id: ChatId,
+    message_ids: Vec<MessageId>
+  ) -> Result<Vec<Option<MessageId>>, TgError> {
+    let mut out = Vec::with_capacity(message_ids.len());
+    for _ in message_ids {
+      let msg = UploadedMessage { chat_id: to_chat_id, message_id: self.alloc_msg_id(), caption_or_text: "mock copy".into() };
+      self.messages.lock().push_back(msg.clone());
+      out.push(Some(msg.message_id));
+    }
+    Ok(out)
   }
 
   async fn download_message_file(&self, _chat_id: ChatId, _message_id: MessageId, target: PathBuf) -> Result<PathBuf, TgError> {
