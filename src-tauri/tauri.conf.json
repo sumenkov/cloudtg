@@ -30,7 +30,7 @@
       "icons/icon.png"
     ],
     "resources": [
-      "resources/tdlib/**"
+      "resources/tdlib"
     ]
   }
 }

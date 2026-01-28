@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::{paths::Paths, db::Db, telegram::{TelegramService, make_telegram_service}};
 
