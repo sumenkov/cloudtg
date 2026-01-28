@@ -7,7 +7,7 @@
 - Backend: Rust
 - Локальная БД: SQLite + миграции (`src-tauri/migrations`)
 - Метаданные в Telegram: теги `#ocltg #v1` (модуль `fsmeta`)
-- Портативность: всё рядом с бинарём: `./data`, `./cache`, `./logs`
+- Портативность: по умолчанию рядом с бинарём (`./data`, `./cache`, `./logs`), на Linux/macOS при отсутствии прав — пользовательские директории
 
 > Для реальной работы с Telegram нужен TDLib (libtdjson).
 > API_ID, API_HASH и путь к TDLib задаются в настройках приложения и хранятся в локальной базе.
@@ -90,14 +90,26 @@ npm install
 npm run tauri:dev
 ```
 
-Откроется окно CloudTG. При первом запуске создадутся папки:
+Откроется окно CloudTG. При первом запуске создадутся папки рядом с бинарём
+(если нет прав — см. разделы «Данные и кеш» и «Логи»):
 - `./data` (SQLite: `cloudtg.sqlite`)
 - `./cache`
 - `./logs`
 
+## Данные и кеш
+На Linux/macOS используется общая директория хранения. Если рядом с бинарём нет прав на запись,
+приложение переносит `data/cache/logs` в пользовательский каталог:
+- Linux: `$XDG_DATA_HOME/cloudtg` → `~/.local/share/cloudtg`
+- macOS: `~/Library/Application Support/CloudTG`
+
+Путь можно задать вручную через переменную `CLOUDTG_STORAGE_DIR` (Linux/macOS).
+На Windows всё остаётся рядом с бинарём.
+
 ## Логи
 Логи пишутся в папку `./logs` в формате **JSON Lines** (одна JSON‑строка на событие).
 Файл имеет вид `cloudtg.jsonl.YYYY-MM-DD` и подходит для последующего парсинга.
+На Linux/macOS логи хранятся вместе с `data/cache` в общей директории
+(см. раздел «Данные и кеш»). Путь можно задать через `CLOUDTG_STORAGE_DIR`.
 
 ## Как получить API_ID и API_HASH Telegram
 1) Открой сайт `my.telegram.org` и войди по номеру телефона.
