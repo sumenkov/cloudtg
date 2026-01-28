@@ -57,6 +57,10 @@ impl TelegramService for MockTelegram {
     Ok(*guard)
   }
 
+  async fn storage_delete_channel(&self, _chat_id: ChatId) -> Result<(), TgError> {
+    Ok(())
+  }
+
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
     let msg = UploadedMessage { chat_id, message_id: self.alloc_msg_id(), caption_or_text: text };
     self.messages.lock().push_back(msg.clone());

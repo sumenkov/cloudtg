@@ -45,9 +45,19 @@ async fn ensure_storage_chat_id(state: &AppState) -> anyhow::Result<i64> {
   sync::set_sync(pool, "storage_chat_id", &chat_id.to_string()).await?;
   info!(event = "storage_chat_id_saved", chat_id = chat_id, "storage_chat_id сохранен");
 
+  let mut reseed_ok = true;
   if previous_id.filter(|id| *id != chat_id).is_some() || previous_id.is_none() {
     if let Err(e) = reseed_storage_channel(pool, tg.as_ref(), previous_id, chat_id).await {
+      reseed_ok = false;
       tracing::error!(event = "storage_channel_reseed_failed", error = %e, "Не удалось пересоздать содержимое канала");
+    }
+  }
+
+  if reseed_ok {
+    if let Some(old_id) = previous_id.filter(|id| *id != chat_id) {
+      if let Err(e) = tg.storage_delete_channel(old_id).await {
+        tracing::warn!(event = "storage_channel_delete_failed", chat_id = old_id, error = %e, "Не удалось удалить старый канал");
+      }
     }
   }
 
@@ -144,6 +154,12 @@ pub async fn tg_create_channel(state: State<'_, AppState>) -> Result<(), String>
   if let Err(e) = reseed_storage_channel(pool, tg.as_ref(), old_id, new_id).await {
     tracing::error!(event = "storage_channel_reseed_failed", error = %e, "Не удалось пересоздать содержимое канала");
     return Err(format!("Не удалось перенести данные: {e}"));
+  }
+
+  if let Some(old) = old_id.filter(|id| *id != new_id) {
+    if let Err(e) = tg.storage_delete_channel(old).await {
+      tracing::warn!(event = "storage_channel_delete_failed", chat_id = old, error = %e, "Не удалось удалить старый канал");
+    }
   }
 
   Ok(())

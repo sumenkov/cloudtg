@@ -34,6 +34,7 @@ pub trait TelegramService: Send + Sync {
   async fn storage_check_channel(&self, chat_id: ChatId) -> Result<bool, TgError>;
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_create_channel(&self) -> Result<ChatId, TgError>;
+  async fn storage_delete_channel(&self, chat_id: ChatId) -> Result<(), TgError>;
 
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
   async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;

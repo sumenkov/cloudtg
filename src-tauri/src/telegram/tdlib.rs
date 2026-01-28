@@ -605,6 +605,55 @@ impl TelegramService for TdlibTelegram {
     Ok(chat_id)
   }
 
+  async fn storage_delete_channel(&self, chat_id: ChatId) -> Result<(), TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "storage_channel_delete", chat_id = chat_id, "Удаление старого канала хранения");
+
+    let chat = self
+      .request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10))
+      .await?;
+    let chat_type = chat.get("type").and_then(|v| v.as_object());
+    let is_channel = chat_type
+      .and_then(|t| t.get("is_channel"))
+      .and_then(|v| v.as_bool())
+      .unwrap_or(false);
+    let type_name = chat_type
+      .and_then(|t| t.get("@type"))
+      .and_then(|v| v.as_str())
+      .unwrap_or("");
+
+    if type_name == "chatTypeSupergroup" && is_channel {
+      let supergroup_id = chat_type
+        .and_then(|t| t.get("supergroup_id"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+      if supergroup_id != 0 {
+        let can_delete = self.is_supergroup_usable(supergroup_id).await.unwrap_or(false);
+        if can_delete {
+          if let Err(e) = self
+            .request(json!({"@type":"deleteSupergroup","supergroup_id":supergroup_id}), Duration::from_secs(10))
+            .await
+          {
+            tracing::warn!(event = "storage_channel_delete_failed", chat_id = chat_id, error = %e, "Не удалось удалить канал, пробую выйти");
+          } else {
+            return Ok(());
+          }
+        }
+      }
+    }
+
+    let _ = self
+      .request(
+        json!({"@type":"deleteChatHistory","chat_id":chat_id,"remove_from_chat_list":true,"revoke":true}),
+        Duration::from_secs(10)
+      )
+      .await;
+    let _ = self
+      .request(json!({"@type":"leaveChat","chat_id":chat_id}), Duration::from_secs(10))
+      .await;
+    Ok(())
+  }
+
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
     self.ensure_authorized().await?;
     tracing::info!(event = "tdlib_send_text_message", chat_id = chat_id, "Отправка тестового сообщения");
