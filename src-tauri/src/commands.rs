@@ -321,11 +321,15 @@ pub async fn settings_set_tg(
     tdlib_path_present = tdlib_path.as_ref().map(|p| !p.is_empty()).unwrap_or(false),
     "Сохранение настроек Telegram"
   );
-  if api_id <= 0 {
-    return Err("API_ID должен быть положительным числом".into());
-  }
-  if api_hash.trim().is_empty() {
-    return Err("API_HASH не может быть пустым".into());
+  let mut resolved_api_id = api_id;
+  let mut resolved_api_hash = api_hash.trim().to_string();
+  if resolved_api_id <= 0 || resolved_api_hash.is_empty() {
+    if let Some(env_settings) = crate::settings::env_tg_settings_public() {
+      resolved_api_id = env_settings.api_id;
+      resolved_api_hash = env_settings.api_hash;
+    } else {
+      return Err("API_ID/API_HASH не заданы. Укажи переменные окружения CLOUDTG_API_ID и CLOUDTG_API_HASH.".into());
+    }
   }
 
   let db = state.db().map_err(map_err)?;
@@ -339,10 +343,10 @@ pub async fn settings_set_tg(
     }
   }
 
-  settings::set_tg_settings(db.pool(), api_id, api_hash.clone(), tdlib_path.clone()).await.map_err(map_err)?;
+  settings::set_tg_settings(db.pool(), resolved_api_id, resolved_api_hash.clone(), tdlib_path.clone()).await.map_err(map_err)?;
 
   let tg = state.telegram().map_err(map_err)?;
-  tg.configure(api_id, api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
+  tg.configure(resolved_api_id, resolved_api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
   state.set_auth_state(AuthState::Unknown);
   info!(event = "settings_set_tg_done", "Настройки Telegram сохранены");
   Ok(())

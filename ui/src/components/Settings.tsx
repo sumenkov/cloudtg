@@ -10,8 +10,6 @@ type TgSettingsView = {
 
 export function Settings({ onClose }: { onClose?: () => void }) {
   const { setError, refreshAuth, refreshSettings, tdlibBuild, tdlibLogs } = useAppStore();
-  const [apiId, setApiId] = useState("");
-  const [apiHash, setApiHash] = useState("");
   const [tdlibPath, setTdlibPath] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -27,8 +25,6 @@ export function Settings({ onClose }: { onClose?: () => void }) {
     (async () => {
       try {
         const s = await invokeSafe<TgSettingsView>("settings_get_tg");
-        if (s.api_id) setApiId(String(s.api_id));
-        if (s.api_hash) setApiHash(s.api_hash);
         if (s.tdlib_path) setTdlibPath(s.tdlib_path);
       } catch (e: any) {
         setError(String(e));
@@ -41,30 +37,10 @@ export function Settings({ onClose }: { onClose?: () => void }) {
       <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <b>Настройки Telegram API</b>
         <div style={{ opacity: 0.8, marginTop: 6 }}>
-          Укажи значения API_ID и API_HASH, полученные в Telegram. Если путь к TDLib пустой,
-          приложение попробует скачать и собрать библиотеку автоматически.
+          Значения API_ID и API_HASH берутся из переменных окружения CLOUDTG_API_ID и CLOUDTG_API_HASH.
+          Если путь к TDLib пустой, приложение попробует скачать и собрать библиотеку автоматически.
         </div>
       </div>
-
-      <label>
-        API_ID
-        <input
-          value={apiId}
-          onChange={(e) => setApiId(e.target.value)}
-          placeholder="123456"
-          style={{ width: "100%", padding: 10 }}
-        />
-      </label>
-
-      <label>
-        API_HASH
-        <input
-          value={apiHash}
-          onChange={(e) => setApiHash(e.target.value)}
-          placeholder="0123456789abcdef0123456789abcdef"
-          style={{ width: "100%", padding: 10 }}
-        />
-      </label>
 
       <label>
         Путь к TDLib (libtdjson)
@@ -85,20 +61,9 @@ export function Settings({ onClose }: { onClose?: () => void }) {
             try {
               setSaving(true);
               setStatus("Сохраняю...");
-              const id = parseInt(apiId.trim(), 10);
-              if (!Number.isFinite(id) || id <= 0) {
-                setStatus("API_ID должен быть положительным числом");
-                setSaving(false);
-                return;
-              }
-              if (!apiHash.trim()) {
-                setStatus("API_HASH не может быть пустым");
-                setSaving(false);
-                return;
-              }
               await invokeSafe("settings_set_tg", {
-                apiId: id,
-                apiHash: apiHash.trim(),
+                apiId: 0,
+                apiHash: "",
                 tdlibPath: tdlibPath.trim() ? tdlibPath.trim() : null
               });
               await refreshSettings();

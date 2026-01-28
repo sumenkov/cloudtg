@@ -344,6 +344,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "dotenvy",
  "hex",
  "libloading 0.8.9",
  "once_cell",

@@ -34,6 +34,7 @@ fn apply_webview_icon(window: &tauri::WebviewWindow, icon: &tauri::image::Image<
 }
 
 fn main() {
+  let _ = dotenvy::dotenv();
   cloudtg_lib::logging::init();
   let icon_for_setup = load_app_icon();
 
