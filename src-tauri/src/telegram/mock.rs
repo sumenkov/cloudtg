@@ -3,7 +3,7 @@ use std::{collections::VecDeque, path::PathBuf};
 use parking_lot::Mutex;
 
 use crate::paths::Paths;
-use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage};
+use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage, SearchMessagesResult, HistoryMessage};
 
 pub struct MockTelegram {
   paths: Paths,
@@ -59,6 +59,11 @@ impl TelegramService for MockTelegram {
 
   async fn storage_delete_channel(&self, _chat_id: ChatId) -> Result<(), TgError> {
     Ok(())
+  }
+
+  async fn search_storage_messages(&self, _chat_id: ChatId, _from_message_id: MessageId, _limit: i32)
+    -> Result<SearchMessagesResult, TgError> {
+    Ok(SearchMessagesResult { total_count: Some(0), next_from_message_id: 0, messages: Vec::new() })
   }
 
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {

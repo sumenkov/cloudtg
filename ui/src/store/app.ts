@@ -18,6 +18,12 @@ type State = {
     detail: string | null;
     progress: number | null;
   };
+  tgSync: {
+    state: string | null;
+    message: string | null;
+    processed: number;
+    total: number | null;
+  };
   tdlibLogs: Array<{ stream: "stdout" | "stderr"; line: string }>;
   tgSettings: {
     api_id: number | null;
@@ -28,6 +34,7 @@ type State = {
   setAuth: (v: State["auth"] | string) => void;
   setError: (v: string | null) => void;
   setTdlibBuild: (v: State["tdlibBuild"]) => void;
+  setTgSync: (v: State["tgSync"]) => void;
   clearTdlibLogs: () => void;
   pushTdlibLog: (stream: "stdout" | "stderr", line: string) => void;
   touchTdlibBuildOnLog: () => void;
@@ -43,6 +50,7 @@ export const useAppStore = create<State>((set, get) => ({
   tree: null,
   error: null,
   tdlibBuild: { state: null, message: null, detail: null, progress: null },
+  tgSync: { state: null, message: null, processed: 0, total: null },
   tdlibLogs: [],
   tgSettings: { api_id: null, api_hash: null, tdlib_path: null },
 
@@ -59,6 +67,7 @@ export const useAppStore = create<State>((set, get) => ({
       }
       return { tdlibBuild: { ...v, progress } };
     }),
+  setTgSync: (v) => set({ tgSync: v }),
   clearTdlibLogs: () => set({ tdlibLogs: [] }),
   touchTdlibBuildOnLog: () =>
     set((s) => {

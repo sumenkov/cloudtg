@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
 use crate::settings::TgSettings;
-use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage};
+use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage, HistoryMessage, SearchMessagesResult};
 
 #[derive(Clone)]
 struct TdlibConfig {
@@ -136,6 +136,68 @@ fn storage_channel_title_legacy() -> &'static str {
 
 fn app_icon_bytes() -> &'static [u8] {
   include_bytes!("../../icons/icon.png")
+}
+
+fn extract_text(content: &Value) -> Option<String> {
+  let t = content.get("@type").and_then(|v| v.as_str()).unwrap_or("");
+  if t == "messageText" {
+    return content
+      .get("text")
+      .and_then(|v| v.get("text"))
+      .and_then(|v| v.as_str())
+      .map(|s| s.to_string());
+  }
+  None
+}
+
+fn extract_caption(content: &Value) -> Option<String> {
+  content
+    .get("caption")
+    .and_then(|v| v.get("text"))
+    .and_then(|v| v.as_str())
+    .map(|s| s.to_string())
+}
+
+fn extract_file_size(content: &Value) -> Option<i64> {
+  if let Some(size) = content.get("file_size").and_then(|v| v.as_i64()) {
+    return Some(size);
+  }
+
+  let candidates = [
+    "document",
+    "video",
+    "audio",
+    "voice_note",
+    "video_note",
+    "animation",
+    "sticker",
+    "photo"
+  ];
+
+  for key in candidates {
+    if let Some(obj) = content.get(key).and_then(|v| v.as_object()) {
+      if let Some(size) = obj.get("file_size").and_then(|v| v.as_i64()) {
+        return Some(size);
+      }
+      if let Some(file) = obj.get("file").and_then(|v| v.as_object()) {
+        if let Some(size) = file.get("size").and_then(|v| v.as_i64()) {
+          return Some(size);
+        }
+      }
+      if let Some(doc) = obj.get("document").and_then(|v| v.as_object()) {
+        if let Some(file) = doc.get("file").and_then(|v| v.as_object()) {
+          if let Some(size) = file.get("size").and_then(|v| v.as_i64()) {
+            return Some(size);
+          }
+        }
+        if let Some(size) = doc.get("file_size").and_then(|v| v.as_i64()) {
+          return Some(size);
+        }
+      }
+    }
+  }
+
+  None
 }
 
 impl TdlibTelegram {
@@ -652,6 +714,55 @@ impl TelegramService for TdlibTelegram {
       .request(json!({"@type":"leaveChat","chat_id":chat_id}), Duration::from_secs(10))
       .await;
     Ok(())
+  }
+
+  async fn search_storage_messages(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
+    -> Result<SearchMessagesResult, TgError> {
+    self.ensure_authorized().await?;
+    let res = self
+      .request(
+        json!({
+          "@type":"searchChatMessages",
+          "chat_id": chat_id,
+          "query": "#ocltg",
+          "from_message_id": from_message_id,
+          "offset": 0,
+          "limit": limit,
+          "filter": null,
+          "sender_id": null,
+          "topic_id": null
+        }),
+        Duration::from_secs(30)
+      )
+      .await?;
+
+    let total_count = res
+      .get("total_count")
+      .and_then(|v| v.as_i64())
+      .and_then(|v| if v < 0 { None } else { Some(v) });
+    let next_from_message_id = res
+      .get("next_from_message_id")
+      .and_then(|v| v.as_i64())
+      .unwrap_or(0);
+
+    let mut messages = Vec::new();
+    if let Some(list) = res.get("messages").and_then(|v| v.as_array()) {
+      for m in list {
+        let id = m.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        if id == 0 {
+          continue;
+        }
+        let date = m.get("date").and_then(|v| v.as_i64()).unwrap_or(0);
+        let (text, caption, file_size) = if let Some(content) = m.get("content") {
+          (extract_text(content), extract_caption(content), extract_file_size(content))
+        } else {
+          (None, None, None)
+        };
+        messages.push(HistoryMessage { id, date, text, caption, file_size });
+      }
+    }
+
+    Ok(SearchMessagesResult { total_count, next_from_message_id, messages })
   }
 
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {

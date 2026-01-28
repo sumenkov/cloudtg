@@ -49,6 +49,7 @@ fn main() {
       commands::dir_list_tree,
       commands::tg_test_message,
       commands::tg_create_channel,
+      commands::tg_sync_storage,
       commands::settings_get_tg,
       commands::settings_set_tg
     ])

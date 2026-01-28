@@ -12,6 +12,22 @@ pub struct UploadedMessage {
   pub caption_or_text: String
 }
 
+#[derive(Debug, Clone)]
+pub struct HistoryMessage {
+  pub id: MessageId,
+  pub date: i64,
+  pub text: Option<String>,
+  pub caption: Option<String>,
+  pub file_size: Option<i64>
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchMessagesResult {
+  pub total_count: Option<i64>,
+  pub next_from_message_id: MessageId,
+  pub messages: Vec<HistoryMessage>
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum TgError {
   #[error("не реализовано")]
@@ -35,6 +51,8 @@ pub trait TelegramService: Send + Sync {
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_delete_channel(&self, chat_id: ChatId) -> Result<(), TgError>;
+  async fn search_storage_messages(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
+    -> Result<SearchMessagesResult, TgError>;
 
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
   async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;

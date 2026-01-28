@@ -7,13 +7,31 @@ use crate::state::{AppState, AuthState};
 use crate::app::{dirs, sync};
 use crate::settings;
 use crate::paths::Paths;
-use crate::fsmeta::{DirMeta, make_dir_message};
+use crate::fsmeta::{DirMeta, make_dir_message, parse_dir_message, parse_file_caption, FileMeta};
 use tracing::info;
 
 #[derive(serde::Serialize)]
 pub struct AuthStatus { pub state: String }
 
+#[derive(Clone, serde::Serialize)]
+pub struct TgSyncStatus {
+  pub state: String,
+  pub message: String,
+  pub processed: i64,
+  pub total: Option<i64>
+}
+
 fn map_err(e: anyhow::Error) -> String { format!("{e:#}") }
+
+fn emit_sync(app: &AppHandle, state: &str, message: &str, processed: i64, total: Option<i64>) {
+  let payload = TgSyncStatus {
+    state: state.to_string(),
+    message: message.to_string(),
+    processed,
+    total
+  };
+  let _ = app.emit("tg_sync_status", payload);
+}
 
 async fn ensure_storage_chat_id(state: &AppState) -> anyhow::Result<i64> {
   let db = state.db()?;
@@ -163,6 +181,117 @@ pub async fn tg_create_channel(state: State<'_, AppState>) -> Result<(), String>
   }
 
   Ok(())
+}
+
+#[tauri::command]
+pub async fn tg_sync_storage(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+  let res: Result<(), String> = async {
+    info!(event = "storage_sync_start", "Синхронизация данных из Telegram");
+    emit_sync(&app, "start", "Ищу сообщения CloudTG в канале", 0, None);
+
+    let db = state.db().map_err(map_err)?;
+    let pool = db.pool();
+    let existing_dirs: i64 = sqlx::query("SELECT COUNT(1) as cnt FROM directories")
+      .fetch_one(pool)
+      .await
+      .map_err(|e| e.to_string())?
+      .get::<i64,_>("cnt");
+    let existing_files: i64 = sqlx::query("SELECT COUNT(1) as cnt FROM files")
+      .fetch_one(pool)
+      .await
+      .map_err(|e| e.to_string())?
+      .get::<i64,_>("cnt");
+    if existing_dirs > 0 || existing_files > 0 {
+      info!(
+        event = "storage_sync_skip",
+        dirs = existing_dirs,
+        files = existing_files,
+        "Локальные данные уже есть, синхронизация не требуется"
+      );
+      emit_sync(&app, "skip", "Локальные данные уже есть, синхронизация не требуется", 0, None);
+      return Ok(());
+    }
+
+    let tg = state.telegram().map_err(map_err)?;
+    let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+
+    let mut from_message_id: i64 = 0;
+    let mut processed: i64 = 0;
+    let mut total: Option<i64> = None;
+    let mut dir_count: i64 = 0;
+    let mut file_count: i64 = 0;
+
+    loop {
+      let batch = tg
+        .search_storage_messages(chat_id, from_message_id, 100)
+        .await
+        .map_err(|e| e.to_string())?;
+
+      if total.is_none() {
+        total = batch.total_count;
+        if let Some(t) = total {
+          info!(event = "storage_sync_total", total = t, "Оценка количества сообщений");
+        }
+      }
+
+      if batch.messages.is_empty() {
+        break;
+      }
+
+      for msg in batch.messages {
+        processed += 1;
+        if let Some(text) = msg.text.as_deref() {
+          if let Ok(meta) = parse_dir_message(text) {
+            upsert_dir(pool, &meta, msg.id, msg.date).await.map_err(map_err)?;
+            dir_count += 1;
+            continue;
+          }
+        }
+
+        if let Some(caption) = msg.caption.as_deref() {
+          if let Ok(meta) = parse_file_caption(caption) {
+            upsert_file(pool, &meta, chat_id, msg.id, msg.date, msg.file_size.unwrap_or(0)).await.map_err(map_err)?;
+            file_count += 1;
+            continue;
+          }
+        }
+      }
+
+      emit_sync(&app, "progress", "Читаю сообщения канала", processed, total);
+      info!(
+        event = "storage_sync_batch",
+        processed = processed,
+        dirs = dir_count,
+        files = file_count,
+        next_from_message_id = batch.next_from_message_id,
+        "Обработан пакет сообщений"
+      );
+
+      if batch.next_from_message_id == 0 {
+        break;
+      }
+      from_message_id = batch.next_from_message_id;
+    }
+
+    sync::set_sync(pool, "storage_sync_done", &Utc::now().to_rfc3339()).await.map_err(map_err)?;
+    emit_sync(&app, "success", "Синхронизация завершена", processed, total);
+    info!(
+      event = "storage_sync_done",
+      processed = processed,
+      dirs = dir_count,
+      files = file_count,
+      "Синхронизация завершена"
+    );
+
+    Ok(())
+  }.await;
+
+  if let Err(err) = res.as_ref() {
+    emit_sync(&app, "error", "Синхронизация не удалась", 0, None);
+    tracing::error!(event = "storage_sync_error", error = err, "Ошибка синхронизации");
+  }
+
+  res
 }
 
 #[tauri::command]
@@ -337,6 +466,82 @@ async fn flush_file_batch(
   }
 
   items.clear();
+  Ok(())
+}
+
+async fn upsert_dir(pool: &sqlx::SqlitePool, meta: &DirMeta, msg_id: i64, date: i64) -> anyhow::Result<()> {
+  let parent_id = if meta.parent_id == "ROOT" || meta.parent_id.trim().is_empty() {
+    None
+  } else {
+    Some(meta.parent_id.as_str())
+  };
+  if let Some(pid) = parent_id {
+    ensure_dir_placeholder(pool, pid, date).await?;
+  }
+  sqlx::query(
+    "INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at) VALUES(?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id, name=excluded.name, tg_msg_id=excluded.tg_msg_id, updated_at=excluded.updated_at"
+  )
+    .bind(&meta.dir_id)
+    .bind(parent_id)
+    .bind(&meta.name)
+    .bind(msg_id)
+    .bind(date)
+    .execute(pool)
+    .await?;
+  Ok(())
+}
+
+async fn upsert_file(
+  pool: &sqlx::SqlitePool,
+  meta: &FileMeta,
+  chat_id: i64,
+  msg_id: i64,
+  date: i64,
+  size: i64
+) -> anyhow::Result<()> {
+  ensure_dir_placeholder(pool, &meta.dir_id, date).await?;
+
+  sqlx::query(
+    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET dir_id=excluded.dir_id, name=excluded.name, size=excluded.size, hash=excluded.hash, tg_chat_id=excluded.tg_chat_id, tg_msg_id=excluded.tg_msg_id, created_at=excluded.created_at"
+  )
+    .bind(&meta.file_id)
+    .bind(&meta.dir_id)
+    .bind(&meta.name)
+    .bind(size)
+    .bind(&meta.hash_short)
+    .bind(chat_id)
+    .bind(msg_id)
+    .bind(date)
+    .execute(pool)
+    .await?;
+  Ok(())
+}
+
+async fn ensure_dir_placeholder(pool: &sqlx::SqlitePool, dir_id: &str, date: i64) -> anyhow::Result<()> {
+  if dir_id.trim().is_empty() {
+    return Ok(());
+  }
+  let placeholder = "Неизвестная папка";
+  let inserted = sqlx::query(
+    "INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at)
+     VALUES(?, NULL, ?, NULL, ?)
+     ON CONFLICT(id) DO NOTHING"
+  )
+    .bind(dir_id)
+    .bind(placeholder)
+    .bind(date)
+    .execute(pool)
+    .await?;
+  if inserted.rows_affected() > 0 {
+    tracing::debug!(
+      event = "storage_sync_dir_placeholder",
+      dir_id = dir_id,
+      "Добавлена заглушка директории"
+    );
+  }
   Ok(())
 }
 
