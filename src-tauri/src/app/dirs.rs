@@ -81,11 +81,9 @@ pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
   }
 
   fn rebuild(node: &DirNode, map: &std::collections::HashMap<String, DirNode>) -> DirNode {
-    let mut n = node.clone();
-    n.children = n.children.iter().map(|c| {
-      let full = map.get(&c.id).cloned().unwrap_or_else(|| c.clone());
-      rebuild(&full, map)
-    }).collect();
+    let full = map.get(&node.id).cloned().unwrap_or_else(|| node.clone());
+    let mut n = full.clone();
+    n.children = full.children.iter().map(|c| rebuild(c, map)).collect();
     n
   }
 
