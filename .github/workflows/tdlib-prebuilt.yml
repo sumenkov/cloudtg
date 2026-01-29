@@ -66,10 +66,10 @@ jobs:
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/tdlib/td.git
-          awk '{gsub(/extern int getopt *\\([^)]*\\);/, "extern int getopt (int argc, char *const argv[], const char *optstring);"); print}' \
+          awk '{if ($0 ~ /extern[[:space:]]+int[[:space:]]+getopt/) {print "extern int getopt (int argc, char *const argv[], const char *optstring);"; next} print}' \
             td/td/generate/tl-parser/wgetopt.h > td/td/generate/tl-parser/wgetopt.h.tmp && \
             mv td/td/generate/tl-parser/wgetopt.h.tmp td/td/generate/tl-parser/wgetopt.h
-          awk '{gsub(/extern char \\*getenv *\\(\\);/, "extern char *getenv (const char *);"); print}' \
+          awk '{if ($0 ~ /extern[[:space:]]+char[[:space:]]+\\*getenv/) {print "extern char *getenv (const char *);"; next} print}' \
             td/td/generate/tl-parser/wgetopt.c > td/td/generate/tl-parser/wgetopt.c.tmp && \
             mv td/td/generate/tl-parser/wgetopt.c.tmp td/td/generate/tl-parser/wgetopt.c
           cd td
