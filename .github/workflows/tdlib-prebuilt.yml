@@ -2,6 +2,19 @@ name: Сборка TDLib (prebuilt)
 
 on:
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Тег релиза TDLib (например tdlib-prebuilt)"
+        required: true
+        default: "tdlib-prebuilt"
+      target_sha:
+        description: "Коммит или ветка для релиза (необязательно)"
+        required: false
+        default: ""
+      release_name:
+        description: "Название релиза"
+        required: false
+        default: "TDLib prebuilt"
   release:
     types: [published]
 
@@ -11,6 +24,7 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.name }}
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'tdlib-')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -150,7 +164,7 @@ jobs:
             out/tdlib/tdlib-${{ matrix.name }}.commit
 
   publish:
-    if: github.event_name == 'release'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'tdlib-')
     needs: build
     runs-on: ubuntu-24.04
     steps:
@@ -160,12 +174,36 @@ jobs:
           path: out/tdlib
           merge-multiple: true
 
+      - name: Подготовка параметров релиза
+        id: release_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=TDLib ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "target=" >> "$GITHUB_OUTPUT"
+          else
+            tag="${{ inputs.tag_name }}"
+            if [[ -z "$tag" ]]; then
+              tag="tdlib-prebuilt"
+            fi
+            name="${{ inputs.release_name }}"
+            if [[ -z "$name" ]]; then
+              name="TDLib prebuilt"
+            fi
+            target="${{ inputs.target_sha }}"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "name=$name" >> "$GITHUB_OUTPUT"
+            echo "target=$target" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Формирование манифеста
         shell: bash
         run: |
           set -euo pipefail
           repo="${GITHUB_REPOSITORY}"
-          tag="${GITHUB_REF_NAME}"
+          tag="${{ steps.release_meta.outputs.tag }}"
           python3 - <<'PY' "$repo" "$tag"
           import json
           import os
@@ -208,6 +246,10 @@ jobs:
       - name: Публикация в релиз
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          target_commitish: ${{ steps.release_meta.outputs.target }}
+          name: ${{ steps.release_meta.outputs.name }}
+          make_latest: false
           files: |
             out/tdlib/tdlib-*.zip
             out/tdlib/tdlib-*.tar.gz

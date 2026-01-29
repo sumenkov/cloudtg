@@ -1294,26 +1294,59 @@ fn resolve_tdlib_manifest_url(repo: &str) -> anyhow::Result<Option<String>> {
     }
   }
 
-  let api_url = format!("https://api.github.com/repos/{repo}/releases/latest");
   let agent = http_agent();
-  let mut req = agent.get(&api_url).set("User-Agent", "cloudtg").set("Accept", "application/vnd.github+json");
+  let mut req = agent
+    .get(&format!("https://api.github.com/repos/{repo}/releases/latest"))
+    .set("User-Agent", "cloudtg")
+    .set("Accept", "application/vnd.github+json");
   if let Some(token) = github_token() {
     req = req.set("Authorization", &format!("Bearer {token}"));
   }
   let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось получить релиз TDLib: {e}"))?;
   let body = response.into_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать ответ релиза: {e}"))?;
   let json: Value = serde_json::from_str(&body)?;
-  let assets = json.get("assets").and_then(|v| v.as_array()).ok_or_else(|| anyhow::anyhow!("Некорректный ответ релиза"))?;
+  if let Some(url) = find_manifest_url(&json) {
+    return Ok(Some(url));
+  }
+  let tag = json.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
+  tracing::info!(event = "tdlib_manifest_missing", tag = tag, "Манифест TDLib не найден в latest релизе");
+
+  let mut req = agent
+    .get(&format!("https://api.github.com/repos/{repo}/releases?per_page=10"))
+    .set("User-Agent", "cloudtg")
+    .set("Accept", "application/vnd.github+json");
+  if let Some(token) = github_token() {
+    req = req.set("Authorization", &format!("Bearer {token}"));
+  }
+  let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось получить список релизов TDLib: {e}"))?;
+  let body = response.into_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать список релизов: {e}"))?;
+  let releases: Value = serde_json::from_str(&body)?;
+  let Some(list) = releases.as_array() else {
+    return Ok(None);
+  };
+  for rel in list {
+    if let Some(url) = find_manifest_url(rel) {
+      let tag = rel.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
+      tracing::info!(event = "tdlib_manifest_found", tag = tag, "Найден манифест TDLib в релизе");
+      return Ok(Some(url));
+    }
+  }
+
+  Ok(None)
+}
+
+fn find_manifest_url(release: &Value) -> Option<String> {
+  let assets = release.get("assets").and_then(|v| v.as_array())?;
   for asset in assets {
     let name = asset.get("name").and_then(|v| v.as_str()).unwrap_or("");
     if name == TDLIB_MANIFEST_NAME {
       let url = asset.get("browser_download_url").and_then(|v| v.as_str()).unwrap_or("");
       if !url.is_empty() {
-        return Ok(Some(url.to_string()));
+        return Some(url.to_string());
       }
     }
   }
-  Ok(None)
+  None
 }
 
 fn fetch_tdlib_manifest(url: &str) -> anyhow::Result<TdlibManifest> {
