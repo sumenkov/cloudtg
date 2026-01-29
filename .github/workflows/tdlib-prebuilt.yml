@@ -45,38 +45,25 @@ jobs:
           brew install cmake gperf openssl@3 ninja
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
-      - name: Установка MSYS2 (Windows)
+      - name: Установка зависимостей (Windows)
         if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-gperf
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-openssl
-            mingw-w64-x86_64-zlib
-            git
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install gperf -y
+          $vcpkg = "C:\\vcpkg"
+          & "$vcpkg\\vcpkg.exe" install openssl:x64-windows zlib:x64-windows
 
       - name: Сборка TDLib (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = 'Stop'
           git clone --depth 1 https://github.com/tdlib/td.git
-          awk '{if ($0 ~ /extern[[:space:]]+int[[:space:]]+getopt[[:space:]]*\\(/ && $0 !~ /getopt_long/) {print "extern int getopt (int argc, char *const argv[], const char *optstring);"; next} print}' \
-            td/td/generate/tl-parser/wgetopt.h > td/td/generate/tl-parser/wgetopt.h.tmp && \
-            mv td/td/generate/tl-parser/wgetopt.h.tmp td/td/generate/tl-parser/wgetopt.h
-          awk '{if ($0 ~ /extern[[:space:]]+char[[:space:]]+\\*getenv/) {print "extern char *getenv (const char *);"; next} print}' \
-            td/td/generate/tl-parser/wgetopt.c > td/td/generate/tl-parser/wgetopt.c.tmp && \
-            mv td/td/generate/tl-parser/wgetopt.c.tmp td/td/generate/tl-parser/wgetopt.c
-          cd td
-          mkdir build
-          cd build
-          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
-          cmake --build . --target tdjson
+          New-Item -ItemType Directory -Force -Path td/build | Out-Null
+          Set-Location td/build
+          cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake ..
+          cmake --build . --config Release --target tdjson
 
       - name: Сборка TDLib
         if: runner.os != 'Windows'
@@ -93,22 +80,19 @@ jobs:
 
       - name: Подготовка артефакта (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: pwsh
         run: |
-          set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}"
-          lib_path="$(find td/build -name "tdjson.dll" -type f | head -n 1)"
-          if [[ -z "${lib_path:-}" ]]; then
-            echo "tdjson.dll не найден"
+          $ErrorActionPreference = 'Stop'
+          $outDir = Join-Path $env:GITHUB_WORKSPACE "out/tdlib/${{ matrix.name }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $libPath = Get-ChildItem -Path "td/build" -Recurse -Filter "tdjson.dll" | Select-Object -First 1
+          if (-not $libPath) {
+            Write-Error "tdjson.dll не найден"
             exit 1
-          fi
-          cp "$lib_path" "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/"
-          for dep in libcrypto-3-x64.dll libssl-3-x64.dll libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll zlib1.dll; do
-            if [[ -f "/mingw64/bin/$dep" ]]; then
-              cp "/mingw64/bin/$dep" "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/"
-            fi
-          done
-          git -C td rev-parse HEAD > "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt"
+          }
+          Copy-Item $libPath.FullName -Destination $outDir -Force
+          $commit = git -C td rev-parse HEAD
+          $commit | Out-File -FilePath (Join-Path $outDir "TDLIB_COMMIT.txt") -Encoding utf8 -NoNewline
 
       - name: Подготовка артефакта
         if: runner.os != 'Windows'
@@ -130,14 +114,16 @@ jobs:
 
       - name: Архивирование артефакта (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        shell: pwsh
         run: |
-          set -euo pipefail
-          archive="$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.zip"
-          cd "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}"
-          zip -r "$archive" .
-          cp "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt" "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.commit"
-          sha256sum "$archive" | awk '{print $1}' > "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.sha256"
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:GITHUB_WORKSPACE "out/tdlib/tdlib-${{ matrix.name }}.zip"
+          $src = Join-Path $env:GITHUB_WORKSPACE "out/tdlib/${{ matrix.name }}/*"
+          Compress-Archive -Path $src -DestinationPath $archive -Force
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt") `
+            (Join-Path $env:GITHUB_WORKSPACE "out/tdlib/tdlib-${{ matrix.name }}.commit") -Force
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
+          $hash | Out-File -FilePath (Join-Path $env:GITHUB_WORKSPACE "out/tdlib/tdlib-${{ matrix.name }}.sha256") -Encoding ascii -NoNewline
 
       - name: Архивирование артефакта
         if: runner.os != 'Windows'
