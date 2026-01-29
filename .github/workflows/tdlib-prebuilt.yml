@@ -18,12 +18,16 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: linux-x86_64
+            archive: tar.gz
           - os: windows-2022
             name: windows-x86_64
+            archive: zip
           - os: macos-13
             name: macos-x86_64
+            archive: tar.gz
           - os: macos-14
             name: macos-aarch64
+            archive: tar.gz
 
     steps:
       - name: Клонирование репозитория
@@ -100,14 +104,6 @@ jobs:
           done
           git -C td rev-parse HEAD > "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt"
 
-      - name: Архивирование артефакта (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $src = "$env:GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/*"
-          $dst = "$env:GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.zip"
-          Compress-Archive -Path $src -DestinationPath $dst -Force
-
       - name: Подготовка артефакта
         if: runner.os != 'Windows'
         shell: bash
@@ -126,22 +122,103 @@ jobs:
           cp "$lib_path" "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/"
           git -C td rev-parse HEAD > "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt"
 
+      - name: Архивирование артефакта (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          archive="$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.zip"
+          cd "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}"
+          zip -r "$archive" .
+          cp "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt" "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.commit"
+          sha256sum "$archive" | awk '{print $1}' > "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.sha256"
+
       - name: Архивирование артефакта
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
+          archive="$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.tar.gz"
           cd "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}"
-          zip -r "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.zip" .
+          tar -czf "$archive" .
+          cp "$GITHUB_WORKSPACE/out/tdlib/${{ matrix.name }}/TDLIB_COMMIT.txt" "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.commit"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" | awk '{print $1}' > "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.sha256"
+          else
+            shasum -a 256 "$archive" | awk '{print $1}' > "$GITHUB_WORKSPACE/out/tdlib/tdlib-${{ matrix.name }}.sha256"
+          fi
 
       - name: Загрузка артефакта
         uses: actions/upload-artifact@v4
         with:
           name: tdlib-${{ matrix.name }}
-          path: out/tdlib/tdlib-${{ matrix.name }}.zip
+          path: |
+            out/tdlib/tdlib-${{ matrix.name }}.${{ matrix.archive }}
+            out/tdlib/tdlib-${{ matrix.name }}.sha256
+            out/tdlib/tdlib-${{ matrix.name }}.commit
+
+  publish:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Загрузка артефактов
+        uses: actions/download-artifact@v4
+        with:
+          path: out/tdlib
+          merge-multiple: true
+
+      - name: Формирование манифеста
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+          tag="${GITHUB_REF_NAME}"
+          python3 - <<'PY' "$repo" "$tag"
+import json
+import os
+import sys
+from pathlib import Path
+
+repo = sys.argv[1]
+tag = sys.argv[2]
+base = Path("out/tdlib")
+assets = []
+
+for archive in sorted(base.glob("tdlib-*.zip")) + sorted(base.glob("tdlib-*.tar.gz")):
+    name = archive.name
+    platform = name.replace("tdlib-", "").replace(".zip", "").replace(".tar.gz", "")
+    sha_file = base / f"tdlib-{platform}.sha256"
+    commit_file = base / f"tdlib-{platform}.commit"
+    sha256 = sha_file.read_text().strip() if sha_file.exists() else ""
+    commit = commit_file.read_text().strip() if commit_file.exists() else ""
+    url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
+    assets.append({
+        "platform": platform,
+        "file": name,
+        "sha256": sha256,
+        "size": archive.stat().st_size,
+        "url": url,
+        "tdlib_commit": commit
+    })
+
+manifest = {
+    "version": tag,
+    "created_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+    "assets": assets
+}
+
+out_path = base / "tdlib-manifest.json"
+out_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+print(f"manifest: {out_path}")
+PY
 
       - name: Публикация в релиз
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: out/tdlib/tdlib-${{ matrix.name }}.zip
+          files: |
+            out/tdlib/tdlib-*.zip
+            out/tdlib/tdlib-*.tar.gz
+            out/tdlib/tdlib-*.sha256
+            out/tdlib/tdlib-*.commit
+            out/tdlib/tdlib-manifest.json

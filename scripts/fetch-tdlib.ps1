@@ -20,7 +20,7 @@ if (-not $Repo) {
 }
 
 $platform = "windows-x86_64"
-$assetName = "tdlib-$platform.zip"
+$manifestName = "tdlib-manifest.json"
 
 $headers = @{ "Accept" = "application/vnd.github+json" }
 if ($env:GITHUB_TOKEN) {
@@ -29,20 +29,46 @@ if ($env:GITHUB_TOKEN) {
   $headers["Authorization"] = "Bearer $env:GH_TOKEN"
 }
 
-$api = "https://api.github.com/repos/$Repo/releases/latest"
-$release = Invoke-RestMethod -Uri $api -Headers $headers
-$asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
-if (-not $asset) {
-  Write-Error "Не найден артефакт $assetName в релизе."
-  exit 1
+$manifestUrl = $env:CLOUDTG_TDLIB_MANIFEST_URL
+if (-not $manifestUrl) {
+  $api = "https://api.github.com/repos/$Repo/releases/latest"
+  $release = Invoke-RestMethod -Uri $api -Headers $headers
+  $manifestAsset = $release.assets | Where-Object { $_.name -eq $manifestName } | Select-Object -First 1
+  if (-not $manifestAsset) {
+    Write-Error "Не найден манифест $manifestName в релизе."
+    exit 1
+  }
+  $manifestUrl = $manifestAsset.browser_download_url
 }
 
 $dest = Join-Path $RootDir "src-tauri/resources/tdlib/$platform"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 $tmp = New-TemporaryFile
 
-Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $tmp
-Expand-Archive -Path $tmp -DestinationPath $dest -Force
-Remove-Item $tmp -Force
+$manifestJson = Invoke-RestMethod -Uri $manifestUrl -Headers $headers
+$entry = $manifestJson.assets | Where-Object { $_.platform -eq $platform } | Select-Object -First 1
+if (-not $entry) {
+  Write-Error "Не найден артефакт для платформы $platform в манифесте."
+  exit 1
+}
 
+Invoke-WebRequest -Uri $entry.url -Headers $headers -OutFile $tmp
+if ($entry.sha256) {
+  $hash = (Get-FileHash -Algorithm SHA256 -Path $tmp).Hash.ToLower()
+  if ($hash -ne $entry.sha256.ToLower()) {
+    Write-Error "Checksum не совпадает."
+    exit 1
+  }
+}
+
+if ($entry.file -like "*.zip") {
+  Expand-Archive -Path $tmp -DestinationPath $dest -Force
+} elseif ($entry.file -like "*.tar.gz" -or $entry.file -like "*.tgz") {
+  tar -xzf $tmp -C $dest
+} else {
+  Write-Error "Неизвестный формат архива: $($entry.file)"
+  exit 1
+}
+
+Remove-Item $tmp -Force
 Write-Host "TDLib скачан в $dest"

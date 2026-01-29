@@ -1,7 +1,7 @@
 use std::{
   collections::HashMap,
   ffi::{CStr, CString},
-  io::{BufRead, BufReader},
+  io::{BufRead, BufReader, Read, Write},
   os::raw::{c_char, c_double, c_int, c_void},
   path::{Path, PathBuf},
   process::{Command, Stdio},
@@ -10,9 +10,15 @@ use std::{
 };
 
 use libloading::Library;
+use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
+use tempfile::NamedTempFile;
 use tokio::sync::oneshot;
+use flate2::read::GzDecoder;
+use tar::Archive;
+use zip::ZipArchive;
 
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
@@ -130,6 +136,7 @@ enum TdlibCommand {
 
 const STORAGE_CHANNEL_TITLE: &str = "CloudTG";
 const STORAGE_CHANNEL_TITLE_LEGACY: &str = "CloudVault";
+const TDLIB_MANIFEST_NAME: &str = "tdlib-manifest.json";
 
 fn storage_channel_title() -> &'static str {
   STORAGE_CHANNEL_TITLE
@@ -312,13 +319,26 @@ impl TdlibTelegram {
         if client.is_none() {
           if config.is_some() && lib_path.is_none() && !build_attempted {
             build_attempted = true;
-            match attempt_tdlib_build(&paths_for_thread, &app_for_thread) {
-              Ok(p) => {
+            match attempt_tdlib_download(&paths_for_thread, &app_for_thread) {
+              Ok(Some(p)) => {
                 lib_path = Some(p);
               }
+              Ok(None) => {}
               Err(e) => {
-                tracing::error!("Автосборка TDLib не удалась: {e}");
-                set_auth_state(&app_for_thread, AuthState::WaitConfig, &mut last_state);
+                tracing::warn!("Автоскачивание TDLib не удалось: {e}");
+                emit_build_log(&app_for_thread, "stderr", &format!("Ошибка загрузки TDLib: {e}"));
+              }
+            }
+
+            if lib_path.is_none() {
+              match attempt_tdlib_build(&paths_for_thread, &app_for_thread) {
+                Ok(p) => {
+                  lib_path = Some(p);
+                }
+                Err(e) => {
+                  tracing::error!("Автосборка TDLib не удалась: {e}");
+                  set_auth_state(&app_for_thread, AuthState::WaitConfig, &mut last_state);
+                }
               }
             }
           }
@@ -1132,6 +1152,22 @@ fn build_system_ready(build_dir: &Path) -> bool {
   build_dir.join("Makefile").exists() || build_dir.join("build.ninja").exists()
 }
 
+#[derive(Deserialize)]
+struct TdlibManifest {
+  version: String,
+  assets: Vec<TdlibManifestAsset>
+}
+
+#[derive(Deserialize, Clone)]
+struct TdlibManifestAsset {
+  platform: String,
+  file: String,
+  url: String,
+  sha256: Option<String>,
+  size: Option<u64>,
+  tdlib_commit: Option<String>
+}
+
 fn tdlib_reserved_dir(paths: &Paths) -> PathBuf {
   let base = paths.base_dir.join("third_party").join("tdlib");
   if base.exists() {
@@ -1144,6 +1180,83 @@ fn tdlib_reserved_dir(paths: &Paths) -> PathBuf {
     }
   }
   base
+}
+
+fn tdlib_platform_id() -> Option<String> {
+  let os = match std::env::consts::OS {
+    "windows" => "windows",
+    "macos" => "macos",
+    "linux" => "linux",
+    _ => return None
+  };
+  let arch = match std::env::consts::ARCH {
+    "x86_64" => "x86_64",
+    "aarch64" => "aarch64",
+    "amd64" => "x86_64",
+    _ => return None
+  };
+  Some(format!("{os}-{arch}"))
+}
+
+fn tdlib_prebuilt_dir(paths: &Paths) -> PathBuf {
+  tdlib_reserved_dir(paths).join("prebuilt")
+}
+
+fn tdlib_prebuilt_platform_dir(paths: &Paths) -> Option<PathBuf> {
+  tdlib_platform_id().map(|platform| tdlib_prebuilt_dir(paths).join(platform))
+}
+
+fn tdlib_repo() -> Option<String> {
+  if let Ok(raw) = std::env::var("CLOUDTG_TDLIB_REPO") {
+    if let Some(repo) = extract_github_repo(&raw) {
+      return Some(repo);
+    }
+  }
+  if let Some(raw) = option_env!("CLOUDTG_TDLIB_REPO") {
+    if let Some(repo) = extract_github_repo(raw) {
+      return Some(repo);
+    }
+  }
+  if let Some(raw) = option_env!("CARGO_PKG_REPOSITORY") {
+    if let Some(repo) = extract_github_repo(raw) {
+      return Some(repo);
+    }
+  }
+  None
+}
+
+fn extract_github_repo(raw: &str) -> Option<String> {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  if trimmed.contains('/') && !trimmed.contains("github.com") && !trimmed.contains(':') {
+    return Some(trimmed.trim_end_matches(".git").to_string());
+  }
+  if let Some(pos) = trimmed.find("github.com") {
+    let mut s = &trimmed[pos + "github.com".len()..];
+    s = s.trim_start_matches(&[':', '/'][..]);
+    let s = s.trim_end_matches(".git");
+    if let Some((owner, repo)) = s.split_once('/') {
+      if !owner.is_empty() && !repo.is_empty() {
+        return Some(format!("{owner}/{repo}"));
+      }
+    }
+  }
+  None
+}
+
+fn github_token() -> Option<String> {
+  std::env::var("GITHUB_TOKEN")
+    .ok()
+    .or_else(|| std::env::var("GH_TOKEN").ok())
+}
+
+fn http_agent() -> ureq::Agent {
+  ureq::AgentBuilder::new()
+    .timeout_connect(Duration::from_secs(10))
+    .timeout_read(Duration::from_secs(60))
+    .build()
 }
 
 fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
@@ -1174,6 +1287,203 @@ fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
   None
 }
 
+fn resolve_tdlib_manifest_url(repo: &str) -> anyhow::Result<Option<String>> {
+  if let Ok(url) = std::env::var("CLOUDTG_TDLIB_MANIFEST_URL") {
+    if !url.trim().is_empty() {
+      return Ok(Some(url));
+    }
+  }
+
+  let api_url = format!("https://api.github.com/repos/{repo}/releases/latest");
+  let agent = http_agent();
+  let mut req = agent.get(&api_url).set("User-Agent", "cloudtg").set("Accept", "application/vnd.github+json");
+  if let Some(token) = github_token() {
+    req = req.set("Authorization", &format!("Bearer {token}"));
+  }
+  let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось получить релиз TDLib: {e}"))?;
+  let body = response.into_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать ответ релиза: {e}"))?;
+  let json: Value = serde_json::from_str(&body)?;
+  let assets = json.get("assets").and_then(|v| v.as_array()).ok_or_else(|| anyhow::anyhow!("Некорректный ответ релиза"))?;
+  for asset in assets {
+    let name = asset.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    if name == TDLIB_MANIFEST_NAME {
+      let url = asset.get("browser_download_url").and_then(|v| v.as_str()).unwrap_or("");
+      if !url.is_empty() {
+        return Ok(Some(url.to_string()));
+      }
+    }
+  }
+  Ok(None)
+}
+
+fn fetch_tdlib_manifest(url: &str) -> anyhow::Result<TdlibManifest> {
+  let agent = http_agent();
+  let mut req = agent.get(url).set("User-Agent", "cloudtg");
+  if let Some(token) = github_token() {
+    req = req.set("Authorization", &format!("Bearer {token}"));
+  }
+  let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось скачать манифест TDLib: {e}"))?;
+  let body = response.into_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать манифест: {e}"))?;
+  let manifest: TdlibManifest = serde_json::from_str(&body)?;
+  Ok(manifest)
+}
+
+fn download_tdlib_asset(
+  url: &str,
+  expected_sha256: Option<&str>,
+  total_hint: Option<u64>,
+  app: &tauri::AppHandle
+) -> anyhow::Result<NamedTempFile> {
+  let agent = http_agent();
+  let mut req = agent.get(url).set("User-Agent", "cloudtg");
+  if let Some(token) = github_token() {
+    req = req.set("Authorization", &format!("Bearer {token}"));
+  }
+  let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось скачать TDLib: {e}"))?;
+  let mut total = response
+    .header("Content-Length")
+    .and_then(|v| v.parse::<u64>().ok());
+  if total.is_none() {
+    total = total_hint;
+  }
+  let mut reader = response.into_reader();
+  let mut tmp = NamedTempFile::new()?;
+  let mut hasher = Sha256::new();
+  let mut buf = [0u8; 8192];
+  let mut downloaded: u64 = 0;
+  let mut last_percent: i32 = -1;
+
+  loop {
+    let n = reader.read(&mut buf)?;
+    if n == 0 {
+      break;
+    }
+    tmp.write_all(&buf[..n])?;
+    hasher.update(&buf[..n]);
+    downloaded += n as u64;
+    if let Some(total) = total {
+      let percent = ((downloaded * 100) / total) as i32;
+      if percent != last_percent && percent >= 0 && percent <= 100 {
+        last_percent = percent;
+        emit_build_log(app, "stdout", &format!("{percent}%"));
+      }
+    }
+  }
+
+  if let Some(expected) = expected_sha256 {
+    let digest = hex::encode(hasher.finalize());
+    if digest.to_lowercase() != expected.trim().to_lowercase() {
+      return Err(anyhow::anyhow!("Checksum TDLib не совпадает"));
+    }
+  }
+
+  Ok(tmp)
+}
+
+fn extract_tdlib_archive(archive: &Path, file_name: &str, dest: &Path) -> anyhow::Result<()> {
+  if dest.exists() {
+    std::fs::remove_dir_all(dest)?;
+  }
+  std::fs::create_dir_all(dest)?;
+
+  if file_name.ends_with(".zip") {
+    let file = std::fs::File::open(archive)?;
+    let mut zip = ZipArchive::new(file)?;
+    for i in 0..zip.len() {
+      let mut entry = zip.by_index(i)?;
+      let outpath = dest.join(entry.mangled_name());
+      if entry.is_dir() {
+        std::fs::create_dir_all(&outpath)?;
+      } else {
+        if let Some(parent) = outpath.parent() {
+          std::fs::create_dir_all(parent)?;
+        }
+        let mut outfile = std::fs::File::create(&outpath)?;
+        std::io::copy(&mut entry, &mut outfile)?;
+      }
+    }
+    return Ok(());
+  }
+
+  if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
+    let file = std::fs::File::open(archive)?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+    for entry in archive.entries()? {
+      let mut entry = entry?;
+      let path = entry.path()?;
+      let outpath = safe_join(dest, &path)?;
+      if let Some(parent) = outpath.parent() {
+        std::fs::create_dir_all(parent)?;
+      }
+      entry.unpack(&outpath)?;
+    }
+    return Ok(());
+  }
+
+  Err(anyhow::anyhow!("Неизвестный формат архива TDLib"))
+}
+
+fn safe_join(base: &Path, path: &Path) -> anyhow::Result<PathBuf> {
+  let mut out = base.to_path_buf();
+  for component in path.components() {
+    match component {
+      std::path::Component::Normal(p) => out.push(p),
+      std::path::Component::CurDir => {}
+      _ => return Err(anyhow::anyhow!("Некорректный путь в архиве TDLib"))
+    }
+  }
+  Ok(out)
+}
+
+fn attempt_tdlib_download(paths: &Paths, app: &tauri::AppHandle) -> anyhow::Result<Option<PathBuf>> {
+  let Some(platform) = tdlib_platform_id() else {
+    tracing::info!("Платформа не поддерживается для предсобранной TDLib");
+    return Ok(None);
+  };
+  let repo = tdlib_repo();
+  let Some(repo) = repo.as_ref() else {
+    tracing::info!("Репозиторий TDLib не задан, пропускаю автозагрузку");
+    return Ok(None);
+  };
+
+  let Some(manifest_url) = resolve_tdlib_manifest_url(repo)? else {
+    tracing::info!("Манифест TDLib не найден, пропускаю автозагрузку");
+    return Ok(None);
+  };
+  emit_build(app, "download", "Скачиваю предсобранную TDLib", None);
+  let manifest = fetch_tdlib_manifest(&manifest_url)?;
+  tracing::info!(
+    event = "tdlib_manifest_loaded",
+    version = %manifest.version,
+    assets = manifest.assets.len(),
+    "Манифест TDLib загружен"
+  );
+  let asset = manifest.assets.iter().find(|a| a.platform == platform);
+  let Some(asset) = asset else {
+    return Ok(None);
+  };
+
+  tracing::info!(
+    event = "tdlib_manifest_asset",
+    platform = %asset.platform,
+    size = asset.size.unwrap_or(0),
+    tdlib_commit = asset.tdlib_commit.as_deref().unwrap_or(""),
+    "Выбран артефакт TDLib"
+  );
+
+  let tmp = download_tdlib_asset(&asset.url, asset.sha256.as_deref(), asset.size, app)?;
+  let Some(dest) = tdlib_prebuilt_platform_dir(paths) else {
+    return Ok(None);
+  };
+  extract_tdlib_archive(tmp.path(), &asset.file, &dest)?;
+  if let Some(lib) = find_tdjson_lib(&dest) {
+    emit_build(app, "success", "TDLib скачан", Some(lib.to_string_lossy().to_string()));
+    return Ok(Some(lib));
+  }
+  Err(anyhow::anyhow!("Не удалось найти библиотеку TDLib после распаковки"))
+}
+
 fn resolve_tdlib_path(paths: &Paths, configured: Option<&str>) -> Option<PathBuf> {
   if let Some(p) = configured {
     let path = PathBuf::from(p);
@@ -1198,6 +1508,12 @@ fn resolve_tdlib_path(paths: &Paths, configured: Option<&str>) -> Option<PathBuf
   for c in candidates {
     if c.exists() {
       return Some(c);
+    }
+  }
+
+  if let Some(prebuilt_dir) = tdlib_prebuilt_platform_dir(paths) {
+    if let Some(p) = find_tdjson_lib(&prebuilt_dir) {
+      return Some(p);
     }
   }
 

@@ -28,7 +28,12 @@ export function Settings({ onClose }: { onClose?: () => void }) {
   const [testing, setTesting] = useState(false);
   const [creating, setCreating] = useState(false);
   const buildState = tdlibBuild.state;
-  const isBuilding = buildState === "start" || buildState === "clone" || buildState === "configure" || buildState === "build";
+  const isBuilding =
+    buildState === "start" ||
+    buildState === "clone" ||
+    buildState === "configure" ||
+    buildState === "build" ||
+    buildState === "download";
   const isError = buildState === "error";
   const isSuccess = buildState === "success";
   const showGperfHint = tdlibBuild.detail?.toLowerCase().includes("gperf");
@@ -319,7 +324,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
           <div style={{ marginTop: 6 }}>{tdlibBuild.message}</div>
           {isBuilding ? (
             <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-              Сборка идет. Прогресс отображается в главном окне.
+              Идет подготовка TDLib. Прогресс отображается в главном окне.
             </div>
           ) : null}
           {isSuccess && tdlibBuild.detail ? (

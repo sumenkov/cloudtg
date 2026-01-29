@@ -168,15 +168,17 @@ export default function App() {
             background: tdlibBuild.state === "error" ? "#fee" : "#fafafa"
           }}
         >
-          <b>Сборка TDLib</b>
+          <b>Подготовка TDLib</b>
           <div style={{ marginTop: 6 }}>{tdlibBuild.message ?? "Статус сборки"}</div>
-          {["start", "clone", "configure", "build"].includes(tdlibBuild.state ?? "") ? (
+          {["start", "clone", "configure", "build", "download"].includes(tdlibBuild.state ?? "") ? (
             <div style={{ marginTop: 8, height: 8, background: "#e5e5e5", borderRadius: 999 }}>
               <div
                 style={{
                   width:
                     progressValue !== null
                       ? `${progressValue}%`
+                      : tdlibBuild.state === "download"
+                      ? "25%"
                       : tdlibBuild.state === "start"
                       ? "15%"
                       : tdlibBuild.state === "clone"
@@ -194,9 +196,9 @@ export default function App() {
           {progressValue !== null ? (
             <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>Прогресс: {progressValue}%</div>
           ) : null}
-          {["start", "clone", "configure", "build"].includes(tdlibBuild.state ?? "") ? (
+          {["start", "clone", "configure", "build", "download"].includes(tdlibBuild.state ?? "") ? (
             <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-              Пока сборка не закончится, программа работать не будет.
+              Пока подготовка не закончится, программа работать не будет.
             </div>
           ) : null}
           {tdlibBuild.state === "success" ? (

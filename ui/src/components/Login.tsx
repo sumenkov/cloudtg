@@ -15,7 +15,8 @@ export function Login() {
     tdlibBuild.state === "start" ||
     tdlibBuild.state === "clone" ||
     tdlibBuild.state === "configure" ||
-    tdlibBuild.state === "build";
+    tdlibBuild.state === "build" ||
+    tdlibBuild.state === "download";
   const creds = tgSettings.credentials;
   const hasSettings = creds.available;
   const locked = creds.locked;
@@ -32,7 +33,7 @@ export function Login() {
       {showConfigHint ? (
         <div style={{ padding: 12, border: "1px solid #f99", borderRadius: 10, background: "#fee" }}>
           {buildInProgress ? (
-            <div>Идет сборка TDLib. Подробности смотри в настройках.</div>
+            <div>Идет подготовка TDLib. Подробности смотри в настройках.</div>
           ) : buildError ? (
             <div>Сборка TDLib завершилась ошибкой. Открой настройки.</div>
           ) : locked ? (
