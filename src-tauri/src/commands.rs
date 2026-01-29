@@ -2,10 +2,12 @@ use tauri::{Emitter, State, AppHandle};
 use std::path::{Path, PathBuf};
 use sqlx::Row;
 use chrono::Utc;
+use serde::Deserialize;
 
 use crate::state::{AppState, AuthState};
 use crate::app::{dirs, sync};
 use crate::settings;
+use crate::secrets::{self, CredentialsSource};
 use crate::paths::Paths;
 use crate::fsmeta::{DirMeta, make_dir_message, parse_dir_message, parse_file_caption, FileMeta};
 use tracing::info;
@@ -19,6 +21,38 @@ pub struct TgSyncStatus {
   pub message: String,
   pub processed: i64,
   pub total: Option<i64>
+}
+
+#[derive(serde::Serialize)]
+pub struct TgCredentialsView {
+  pub available: bool,
+  pub source: Option<String>,
+  pub keychain_available: bool,
+  pub encrypted_present: bool,
+  pub locked: bool
+}
+
+#[derive(serde::Serialize)]
+pub struct TgSettingsView {
+  pub tdlib_path: Option<String>,
+  pub credentials: TgCredentialsView
+}
+
+#[derive(serde::Serialize)]
+pub struct TgSettingsSaveResult {
+  pub storage: Option<String>,
+  pub message: String
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TgSettingsInput {
+  pub api_id: Option<i32>,
+  pub api_hash: Option<String>,
+  pub remember: Option<bool>,
+  pub storage_mode: Option<String>,
+  pub password: Option<String>,
+  pub tdlib_path: Option<String>
 }
 
 fn map_err(e: anyhow::Error) -> String { format!("{e:#}") }
@@ -295,45 +329,42 @@ pub async fn tg_sync_storage(app: AppHandle, state: State<'_, AppState>) -> Resu
 }
 
 #[tauri::command]
-pub async fn settings_get_tg(state: State<'_, AppState>) -> Result<settings::TgSettingsView, String> {
+pub async fn settings_get_tg(state: State<'_, AppState>) -> Result<TgSettingsView, String> {
   info!(event = "settings_get_tg", "Чтение настроек Telegram");
   let db = state.db().map_err(map_err)?;
-  let mut view = settings::get_tg_settings_view(db.pool()).await.map_err(map_err)?;
-  if let Ok(paths) = state.paths() {
-    if let Some(p) = resolve_tdlib_path_effective(&paths, view.tdlib_path.as_deref()) {
-      view.tdlib_path = Some(p.to_string_lossy().to_string());
-    }
+  let mut tdlib_path = settings::get_tdlib_path(db.pool()).await.map_err(map_err)?;
+  let paths = state.paths().map_err(map_err)?;
+  if let Some(p) = resolve_tdlib_path_effective(&paths, tdlib_path.as_deref()) {
+    tdlib_path = Some(p.to_string_lossy().to_string());
   }
-  Ok(view)
+  let runtime = state.tg_credentials().map(|(creds, _)| creds);
+  let (_, status) = secrets::resolve_credentials(&paths, runtime.as_ref());
+
+  Ok(TgSettingsView {
+    tdlib_path,
+    credentials: TgCredentialsView {
+      available: status.available,
+      source: status.source.map(|s| s.as_str().to_string()),
+      keychain_available: status.keychain_available,
+      encrypted_present: status.encrypted_present,
+      locked: status.locked
+    }
+  })
 }
 
 #[tauri::command]
-pub async fn settings_set_tg(
-  state: State<'_, AppState>,
-  api_id: i32,
-  api_hash: String,
-  tdlib_path: Option<String>
-) -> Result<(), String> {
+pub async fn settings_set_tg(state: State<'_, AppState>, input: TgSettingsInput) -> Result<TgSettingsSaveResult, String> {
   info!(
     event = "settings_set_tg",
-    api_id = api_id,
-    api_hash_len = api_hash.len(),
-    tdlib_path_present = tdlib_path.as_ref().map(|p| !p.is_empty()).unwrap_or(false),
+    api_id = input.api_id.unwrap_or(0),
+    api_hash_len = input.api_hash.as_ref().map(|v| v.len()).unwrap_or(0),
+    tdlib_path_present = input.tdlib_path.as_ref().map(|p| !p.is_empty()).unwrap_or(false),
+    remember = input.remember.unwrap_or(true),
     "Сохранение настроек Telegram"
   );
-  let mut resolved_api_id = api_id;
-  let mut resolved_api_hash = api_hash.trim().to_string();
-  if resolved_api_id <= 0 || resolved_api_hash.is_empty() {
-    if let Some(env_settings) = crate::settings::env_tg_settings_public() {
-      resolved_api_id = env_settings.api_id;
-      resolved_api_hash = env_settings.api_hash;
-    } else {
-      return Err("API_ID/API_HASH не заданы. Укажи переменные окружения CLOUDTG_API_ID и CLOUDTG_API_HASH.".into());
-    }
-  }
 
   let db = state.db().map_err(map_err)?;
-  if let Some(p) = tdlib_path.as_ref().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()) {
+  if let Some(p) = input.tdlib_path.as_ref().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()) {
     let path = std::path::Path::new(&p);
     if !path.exists() {
       return Err("Указанный путь к TDLib не существует".into());
@@ -343,12 +374,106 @@ pub async fn settings_set_tg(
     }
   }
 
-  settings::set_tg_settings(db.pool(), resolved_api_id, resolved_api_hash.clone(), tdlib_path.clone()).await.map_err(map_err)?;
+  settings::set_tdlib_path(db.pool(), input.tdlib_path.clone()).await.map_err(map_err)?;
 
+  let paths = state.paths().map_err(map_err)?;
+  let remember = input.remember.unwrap_or(true);
+  let storage_mode = input.storage_mode.as_deref().unwrap_or("keychain");
+  let mut storage: Option<String> = None;
+
+  let configured_creds = if let (Some(id), Some(hash)) = (input.api_id, input.api_hash.clone()) {
+    let creds = secrets::normalize_credentials(id, hash).map_err(map_err)?;
+    if !remember {
+      state.set_tg_credentials(creds.clone(), CredentialsSource::Runtime);
+      let _ = secrets::keychain_clear();
+      let _ = secrets::encrypted_clear(&paths);
+      storage = Some(CredentialsSource::Runtime.as_str().to_string());
+      Some(creds)
+    } else {
+      match storage_mode {
+        "encrypted" => {
+          let password = input.password.clone().unwrap_or_default();
+          if password.trim().is_empty() {
+            return Err("Нужен пароль для шифрования.".into());
+          }
+          secrets::encrypted_save(&paths, &creds, &password).map_err(map_err)?;
+          let _ = secrets::keychain_clear();
+          state.set_tg_credentials(creds.clone(), CredentialsSource::EncryptedFile);
+          storage = Some(CredentialsSource::EncryptedFile.as_str().to_string());
+        }
+        "keychain" | "auto" => {
+          match secrets::keychain_set(&creds) {
+            Ok(_) => {
+              let _ = secrets::encrypted_clear(&paths);
+              state.set_tg_credentials(creds.clone(), CredentialsSource::Keychain);
+              storage = Some(CredentialsSource::Keychain.as_str().to_string());
+            }
+            Err(_) => {
+              let password = input.password.clone().unwrap_or_default();
+              if password.trim().is_empty() {
+                return Err("Системное хранилище недоступно. Укажи пароль для шифрования.".into());
+              }
+              secrets::encrypted_save(&paths, &creds, &password).map_err(map_err)?;
+              let _ = secrets::keychain_clear();
+              state.set_tg_credentials(creds.clone(), CredentialsSource::EncryptedFile);
+              storage = Some(CredentialsSource::EncryptedFile.as_str().to_string());
+            }
+          }
+        }
+        "runtime" => {
+          state.set_tg_credentials(creds.clone(), CredentialsSource::Runtime);
+          let _ = secrets::keychain_clear();
+          let _ = secrets::encrypted_clear(&paths);
+          storage = Some(CredentialsSource::Runtime.as_str().to_string());
+        }
+        _ => {
+          return Err("Некорректный способ хранения ключей".into());
+        }
+      }
+      Some(creds)
+    }
+  } else {
+    let runtime = state.tg_credentials().map(|(creds, _)| creds);
+    let (existing, _) = secrets::resolve_credentials(&paths, runtime.as_ref());
+    existing
+  };
+
+  if let Some(creds) = configured_creds {
+    let tg = state.telegram().map_err(map_err)?;
+    tg.configure(creds.api_id, creds.api_hash, input.tdlib_path).await.map_err(|e| e.to_string())?;
+    state.set_auth_state(AuthState::Unknown);
+  } else {
+    state.set_auth_state(AuthState::WaitConfig);
+  }
+
+  info!(event = "settings_set_tg_done", storage = storage.as_deref().unwrap_or("none"), "Настройки Telegram сохранены");
+  let message = match storage.as_deref() {
+    Some("keychain") => "Ключи сохранены в системном хранилище.".to_string(),
+    Some("encrypted") => "Ключи сохранены в зашифрованном файле.".to_string(),
+    Some("runtime") => "Ключи действуют только в текущем запуске.".to_string(),
+    _ => "Настройки сохранены.".to_string()
+  };
+  Ok(TgSettingsSaveResult { storage, message })
+}
+
+#[tauri::command]
+pub async fn settings_unlock_tg(state: State<'_, AppState>, password: String) -> Result<(), String> {
+  info!(event = "settings_unlock_tg", password_len = password.len(), "Разблокировка ключей");
+  if password.trim().is_empty() {
+    return Err("Нужен пароль для расшифровки".into());
+  }
+  let paths = state.paths().map_err(map_err)?;
+  if !secrets::encrypted_exists(&paths) {
+    return Err("Зашифрованные ключи не найдены".into());
+  }
+  let creds = secrets::encrypted_load(&paths, &password).map_err(map_err)?;
+  state.set_tg_credentials(creds.clone(), CredentialsSource::EncryptedFile);
+
+  let db = state.db().map_err(map_err)?;
+  let tdlib_path = settings::get_tdlib_path(db.pool()).await.map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
-  tg.configure(resolved_api_id, resolved_api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
+  tg.configure(creds.api_id, creds.api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
   state.set_auth_state(AuthState::Unknown);
-  info!(event = "settings_set_tg_done", "Настройки Telegram сохранены");
   Ok(())
 }
 

@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
-use crate::settings::TgSettings;
+use crate::secrets::TgCredentials;
 use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage, HistoryMessage, SearchMessagesResult};
 
 #[derive(Clone)]
@@ -240,7 +240,7 @@ impl TdlibTelegram {
   pub fn new(
     paths: Paths,
     app: tauri::AppHandle,
-    initial_settings: Option<TgSettings>,
+    initial_settings: Option<TgCredentials>,
     initial_tdlib_path: Option<String>
   ) -> anyhow::Result<Self> {
     let (tx, rx) = mpsc::channel::<TdlibCommand>();

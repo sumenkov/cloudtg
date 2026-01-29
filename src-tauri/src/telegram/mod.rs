@@ -74,7 +74,7 @@ mod tdlib;
 pub fn make_telegram_service(
   paths: Paths,
   app: tauri::AppHandle,
-  tg_settings: Option<crate::settings::TgSettings>,
+  tg_settings: Option<crate::secrets::TgCredentials>,
   tdlib_path: Option<String>
 ) -> anyhow::Result<Arc<dyn TelegramService>> {
   #[cfg(feature = "mock_telegram")]

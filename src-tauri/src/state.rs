@@ -3,7 +3,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use tauri::{AppHandle, Manager};
 
-use crate::{paths::Paths, db::Db, telegram::{TelegramService, make_telegram_service}};
+use crate::{paths::Paths, db::Db, telegram::{TelegramService, make_telegram_service}, secrets::{TgCredentials, CredentialsSource}};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -14,7 +14,9 @@ struct Inner {
   paths: Option<Paths>,
   db: Option<Db>,
   telegram: Option<Arc<dyn TelegramService>>,
-  auth_state: AuthState
+  auth_state: AuthState,
+  tg_credentials: Option<TgCredentials>,
+  tg_credentials_source: Option<CredentialsSource>
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -35,7 +37,9 @@ impl AppState {
         paths: None,
         db: None,
         telegram: None,
-        auth_state: AuthState::Unknown
+        auth_state: AuthState::Unknown,
+        tg_credentials: None,
+        tg_credentials_source: None
       }))
     }
   }
@@ -60,6 +64,25 @@ impl AppState {
     self.inner.read().paths.clone().ok_or_else(|| anyhow::anyhow!("Пути еще не инициализированы"))
   }
 
+  pub fn tg_credentials(&self) -> Option<(TgCredentials, CredentialsSource)> {
+    let inner = self.inner.read();
+    inner.tg_credentials.clone().and_then(|creds| {
+      inner.tg_credentials_source.map(|source| (creds, source))
+    })
+  }
+
+  pub fn set_tg_credentials(&self, creds: TgCredentials, source: CredentialsSource) {
+    let mut inner = self.inner.write();
+    inner.tg_credentials = Some(creds);
+    inner.tg_credentials_source = Some(source);
+  }
+
+  pub fn clear_tg_credentials(&self) {
+    let mut inner = self.inner.write();
+    inner.tg_credentials = None;
+    inner.tg_credentials_source = None;
+  }
+
   pub fn spawn_init(&self, app: AppHandle) {
     let state = self.clone();
     tauri::async_runtime::spawn(async move {
@@ -78,7 +101,7 @@ impl AppState {
     db.migrate().await?;
     tracing::info!(event = "init_db", db_path = %paths.sqlite_path().display(), "База данных подключена");
 
-    let tg_settings = crate::settings::get_tg_settings(db.pool()).await?;
+    let (tg_settings, _) = crate::secrets::resolve_credentials(&paths, None);
     let tdlib_path = crate::settings::get_tdlib_path(db.pool()).await?;
     let telegram = make_telegram_service(paths.clone(), app.clone(), tg_settings, tdlib_path)?;
     tracing::info!(event = "init_telegram_service", "Telegram сервис инициализирован");

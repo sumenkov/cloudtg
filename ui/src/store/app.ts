@@ -26,9 +26,14 @@ type State = {
   };
   tdlibLogs: Array<{ stream: "stdout" | "stderr"; line: string }>;
   tgSettings: {
-    api_id: number | null;
-    api_hash: string | null;
     tdlib_path: string | null;
+    credentials: {
+      available: boolean;
+      source: string | null;
+      keychain_available: boolean;
+      encrypted_present: boolean;
+      locked: boolean;
+    };
   };
 
   setAuth: (v: State["auth"] | string) => void;
@@ -52,7 +57,16 @@ export const useAppStore = create<State>((set, get) => ({
   tdlibBuild: { state: null, message: null, detail: null, progress: null },
   tgSync: { state: null, message: null, processed: 0, total: null },
   tdlibLogs: [],
-  tgSettings: { api_id: null, api_hash: null, tdlib_path: null },
+  tgSettings: {
+    tdlib_path: null,
+    credentials: {
+      available: false,
+      source: null,
+      keychain_available: true,
+      encrypted_present: false,
+      locked: false
+    }
+  },
 
   setAuth: (v) => set({ auth: v as any }),
   setError: (v) => set({ error: v }),
@@ -93,9 +107,16 @@ export const useAppStore = create<State>((set, get) => ({
     return status.state;
   },
   refreshSettings: async () => {
-    const s = await invokeSafe<{ api_id: number | null; api_hash: string | null; tdlib_path: string | null }>(
-      "settings_get_tg"
-    );
+    const s = await invokeSafe<{
+      tdlib_path: string | null;
+      credentials: {
+        available: boolean;
+        source: string | null;
+        keychain_available: boolean;
+        encrypted_present: boolean;
+        locked: boolean;
+      };
+    }>("settings_get_tg");
     set({ tgSettings: s });
   },
 

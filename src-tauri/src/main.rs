@@ -52,7 +52,8 @@ fn main() {
       commands::tg_create_channel,
       commands::tg_sync_storage,
       commands::settings_get_tg,
-      commands::settings_set_tg
+      commands::settings_set_tg,
+      commands::settings_unlock_tg
     ])
     .setup(move |app| {
       if let Some(icon) = icon_for_setup.clone() {

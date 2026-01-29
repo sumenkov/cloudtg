@@ -3,6 +3,7 @@ pub mod paths;
 pub mod state;
 pub mod commands;
 pub mod settings;
+pub mod secrets;
 
 pub mod app;
 pub mod db;

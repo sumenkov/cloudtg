@@ -16,7 +16,10 @@ export function Login() {
     tdlibBuild.state === "clone" ||
     tdlibBuild.state === "configure" ||
     tdlibBuild.state === "build";
-  const hasSettings = Boolean(tgSettings.api_id && tgSettings.api_hash);
+  const creds = tgSettings.credentials;
+  const hasSettings = creds.available;
+  const locked = creds.locked;
+  const showConfigHint = auth === "wait_config" || buildInProgress || buildError || locked || !hasSettings;
 
   return (
     <div style={{ display: "grid", gap: 10, maxWidth: 520 }}>
@@ -26,16 +29,18 @@ export function Login() {
           Нужны API_ID и API_HASH. Путь к TDLib можно указать в настройках или оставить пустым для автосборки.
         </div>
       </div>
-      {auth === "wait_config" ? (
+      {showConfigHint ? (
         <div style={{ padding: 12, border: "1px solid #f99", borderRadius: 10, background: "#fee" }}>
           {buildInProgress ? (
             <div>Идет сборка TDLib. Подробности смотри в настройках.</div>
           ) : buildError ? (
             <div>Сборка TDLib завершилась ошибкой. Открой настройки.</div>
+          ) : locked ? (
+            <div>Ключи сохранены, нужен пароль для расшифровки. Открой настройки.</div>
           ) : hasSettings ? (
-            <div>Настройки сохранены. Ожидаю запуск TDLib, проверь статус в настройках.</div>
+            <div>Ключи получены. Ожидаю запуск TDLib, проверь статус в настройках.</div>
           ) : (
-            <div>Сначала заполни API_ID и API_HASH в настройках.</div>
+            <div>Сначала укажи API_ID и API_HASH в настройках.</div>
           )}
         </div>
       ) : null}
