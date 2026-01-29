@@ -176,43 +176,43 @@ jobs:
           repo="${GITHUB_REPOSITORY}"
           tag="${GITHUB_REF_NAME}"
           python3 - <<'PY' "$repo" "$tag"
-import json
-import os
-import sys
-from pathlib import Path
+          import json
+          import os
+          import sys
+          from pathlib import Path
 
-repo = sys.argv[1]
-tag = sys.argv[2]
-base = Path("out/tdlib")
-assets = []
+          repo = sys.argv[1]
+          tag = sys.argv[2]
+          base = Path("out/tdlib")
+          assets = []
 
-for archive in sorted(base.glob("tdlib-*.zip")) + sorted(base.glob("tdlib-*.tar.gz")):
-    name = archive.name
-    platform = name.replace("tdlib-", "").replace(".zip", "").replace(".tar.gz", "")
-    sha_file = base / f"tdlib-{platform}.sha256"
-    commit_file = base / f"tdlib-{platform}.commit"
-    sha256 = sha_file.read_text().strip() if sha_file.exists() else ""
-    commit = commit_file.read_text().strip() if commit_file.exists() else ""
-    url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
-    assets.append({
-        "platform": platform,
-        "file": name,
-        "sha256": sha256,
-        "size": archive.stat().st_size,
-        "url": url,
-        "tdlib_commit": commit
-    })
+          for archive in sorted(base.glob("tdlib-*.zip")) + sorted(base.glob("tdlib-*.tar.gz")):
+              name = archive.name
+              platform = name.replace("tdlib-", "").replace(".zip", "").replace(".tar.gz", "")
+              sha_file = base / f"tdlib-{platform}.sha256"
+              commit_file = base / f"tdlib-{platform}.commit"
+              sha256 = sha_file.read_text().strip() if sha_file.exists() else ""
+              commit = commit_file.read_text().strip() if commit_file.exists() else ""
+              url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
+              assets.append({
+                  "platform": platform,
+                  "file": name,
+                  "sha256": sha256,
+                  "size": archive.stat().st_size,
+                  "url": url,
+                  "tdlib_commit": commit
+              })
 
-manifest = {
-    "version": tag,
-    "created_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-    "assets": assets
-}
+          manifest = {
+              "version": tag,
+              "created_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+              "assets": assets
+          }
 
-out_path = base / "tdlib-manifest.json"
-out_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
-print(f"manifest: {out_path}")
-PY
+          out_path = base / "tdlib-manifest.json"
+          out_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+          print(f"manifest: {out_path}")
+          PY
 
       - name: Публикация в релиз
         uses: softprops/action-gh-release@v2
