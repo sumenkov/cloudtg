@@ -67,6 +67,7 @@ jobs:
           set -euo pipefail
           git clone --depth 1 https://github.com/tdlib/td.git
           sed -i 's/extern int getopt ([^)]*);/extern int getopt (int argc, char *const argv[], const char *optstring);/' td/td/generate/tl-parser/wgetopt.h || true
+          sed -i 's/extern char \\*getenv *( *);/extern char *getenv (const char *);/' td/td/generate/tl-parser/wgetopt.c || true
           cd td
           mkdir build
           cd build
