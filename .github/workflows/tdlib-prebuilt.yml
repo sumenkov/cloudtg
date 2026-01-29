@@ -22,10 +22,10 @@ jobs:
           - os: windows-2022
             name: windows-x86_64
             archive: zip
-          - os: macos-13
+          - os: macos-15-intel
             name: macos-x86_64
             archive: tar.gz
-          - os: macos-14
+          - os: macos-15
             name: macos-aarch64
             archive: tar.gz
 
@@ -66,6 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/tdlib/td.git
+          sed -i 's/extern int getopt ([^)]*);/extern int getopt (int argc, char *const argv[], const char *optstring);/' td/td/generate/tl-parser/wgetopt.h || true
           cd td
           mkdir build
           cd build
