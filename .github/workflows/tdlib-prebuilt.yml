@@ -66,8 +66,12 @@ jobs:
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/tdlib/td.git
-          sed -i 's/extern int getopt ([^)]*);/extern int getopt (int argc, char *const argv[], const char *optstring);/' td/td/generate/tl-parser/wgetopt.h || true
-          perl -0777 -pi -e 's/extern\\s+char\\s*\\*\\s*getenv\\s*\\([^)]*\\);/extern char *getenv (const char *);/g' td/td/generate/tl-parser/wgetopt.c || true
+          awk '{gsub(/extern int getopt *\\([^)]*\\);/, "extern int getopt (int argc, char *const argv[], const char *optstring);"); print}' \
+            td/td/generate/tl-parser/wgetopt.h > td/td/generate/tl-parser/wgetopt.h.tmp && \
+            mv td/td/generate/tl-parser/wgetopt.h.tmp td/td/generate/tl-parser/wgetopt.h
+          awk '{gsub(/extern char \\*getenv *\\(\\);/, "extern char *getenv (const char *);"); print}' \
+            td/td/generate/tl-parser/wgetopt.c > td/td/generate/tl-parser/wgetopt.c.tmp && \
+            mv td/td/generate/tl-parser/wgetopt.c.tmp td/td/generate/tl-parser/wgetopt.c
           cd td
           mkdir build
           cd build
