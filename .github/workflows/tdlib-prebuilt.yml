@@ -114,7 +114,7 @@ jobs:
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             lib_path="$(find td/build -name "libtdjson.dylib" -type f | head -n 1)"
           else
-            lib_path="$(find td/build \( -name "libtdjson.so" -o -name "libtdjson.so.1" \) -type f | head -n 1)"
+            lib_path="$(find td/build -type f -name "libtdjson.so*" ! -name "*.a" | head -n 1)"
           fi
           if [[ -z "${lib_path:-}" ]]; then
             echo "libtdjson не найден"
