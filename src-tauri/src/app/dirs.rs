@@ -229,7 +229,7 @@ fn normalize_parent_id(raw: Option<String>) -> Option<String> {
   raw.filter(|p| !p.trim().is_empty() && p != "ROOT")
 }
 
-async fn dir_exists(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<bool> {
+pub(crate) async fn dir_exists(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<bool> {
   let count: i64 = sqlx::query("SELECT COUNT(1) as cnt FROM directories WHERE id = ?")
     .bind(dir_id)
     .fetch_one(pool)

@@ -8,9 +8,21 @@ export type DirNode = {
   children: DirNode[];
 };
 
+export type FileItem = {
+  id: string;
+  dir_id: string;
+  name: string;
+  size: number;
+  hash: string;
+  tg_chat_id: number;
+  tg_msg_id: number;
+  created_at: number;
+};
+
 type State = {
   auth: "unknown" | "wait_config" | "wait_phone" | "wait_code" | "wait_password" | "ready" | "closed";
   tree: DirNode | null;
+  files: FileItem[];
   error: string | null;
   tdlibBuild: {
     state: string | null;
@@ -51,11 +63,17 @@ type State = {
   renameDir: (dirId: string, name: string) => Promise<void>;
   moveDir: (dirId: string, parentId: string | null) => Promise<void>;
   deleteDir: (dirId: string) => Promise<void>;
+  refreshFiles: (dirId: string) => Promise<void>;
+  pickFiles: () => Promise<string[]>;
+  uploadFile: (dirId: string, path: string) => Promise<void>;
+  moveFiles: (fileIds: string[], dirId: string) => Promise<void>;
+  deleteFiles: (fileIds: string[]) => Promise<void>;
 };
 
 export const useAppStore = create<State>((set, get) => ({
   auth: "unknown",
   tree: null,
+  files: [],
   error: null,
   tdlibBuild: { state: null, message: null, detail: null, progress: null },
   tgSync: { state: null, message: null, processed: 0, total: null },
@@ -143,6 +161,30 @@ export const useAppStore = create<State>((set, get) => ({
   deleteDir: async (dirId) => {
     await invokeSafe("dir_delete", { dirId });
     await get().refreshTree();
+  },
+  refreshFiles: async (dirId) => {
+    const items = await invokeSafe<FileItem[]>("file_list", { dirId });
+    set({ files: items });
+  },
+  pickFiles: async () => {
+    const files = await invokeSafe<string[]>("file_pick");
+    return files;
+  },
+  uploadFile: async (dirId, path) => {
+    await invokeSafe("file_upload", { dirId, path });
+  },
+  moveFiles: async (fileIds, dirId) => {
+    for (const fileId of fileIds) {
+      await invokeSafe("file_move", { fileId, dirId });
+    }
+  },
+  deleteFiles: async (fileIds) => {
+    if (fileIds.length === 0) return;
+    if (fileIds.length === 1) {
+      await invokeSafe("file_delete", { fileId: fileIds[0] });
+    } else {
+      await invokeSafe("file_delete_many", { fileIds });
+    }
   }
 }));
 

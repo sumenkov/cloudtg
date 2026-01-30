@@ -5,7 +5,7 @@ use chrono::Utc;
 use serde::Deserialize;
 
 use crate::state::{AppState, AuthState};
-use crate::app::{dirs, sync};
+use crate::app::{dirs, sync, files};
 use crate::settings;
 use crate::secrets::{self, CredentialsSource};
 use crate::paths::Paths;
@@ -220,6 +220,58 @@ pub async fn dir_delete(app: AppHandle, state: State<'_, AppState>, dir_id: Stri
 pub async fn dir_list_tree(state: State<'_, AppState>) -> Result<crate::app::models::DirNode, String> {
   let db = state.db().map_err(map_err)?;
   dirs::list_tree(db.pool()).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn file_list(state: State<'_, AppState>, dir_id: String) -> Result<Vec<files::FileItem>, String> {
+  let db = state.db().map_err(map_err)?;
+  files::list_files(db.pool(), &dir_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn file_pick() -> Result<Vec<String>, String> {
+  let files = rfd::FileDialog::new().pick_files().unwrap_or_default();
+  Ok(files
+    .into_iter()
+    .map(|p| p.to_string_lossy().to_string())
+    .collect())
+}
+
+#[tauri::command]
+pub async fn file_upload(state: State<'_, AppState>, dir_id: String, path: String) -> Result<String, String> {
+  info!(event = "file_upload", dir_id = dir_id.as_str(), "Загрузка файла");
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+  let id = files::upload_file(db.pool(), tg.as_ref(), chat_id, &dir_id, Path::new(&path)).await.map_err(map_err)?;
+  Ok(id)
+}
+
+#[tauri::command]
+pub async fn file_move(state: State<'_, AppState>, file_id: String, dir_id: String) -> Result<(), String> {
+  info!(event = "file_move", file_id = file_id.as_str(), dir_id = dir_id.as_str(), "Перемещение файла");
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  files::move_file(db.pool(), tg.as_ref(), &file_id, &dir_id).await.map_err(map_err)?;
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn file_delete(state: State<'_, AppState>, file_id: String) -> Result<(), String> {
+  info!(event = "file_delete", file_id = file_id.as_str(), "Удаление файла");
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  files::delete_file(db.pool(), tg.as_ref(), &file_id).await.map_err(map_err)?;
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn file_delete_many(state: State<'_, AppState>, file_ids: Vec<String>) -> Result<(), String> {
+  info!(event = "file_delete_many", count = file_ids.len(), "Удаление нескольких файлов");
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  files::delete_files(db.pool(), tg.as_ref(), &file_ids).await.map_err(map_err)?;
+  Ok(())
 }
 
 #[tauri::command]

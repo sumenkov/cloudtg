@@ -57,6 +57,7 @@ pub trait TelegramService: Send + Sync {
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
   async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
   async fn edit_message_text(&self, chat_id: ChatId, message_id: MessageId, text: String) -> Result<(), TgError>;
+  async fn edit_message_caption(&self, chat_id: ChatId, message_id: MessageId, caption: String) -> Result<(), TgError>;
   async fn send_file(&self, chat_id: ChatId, path: std::path::PathBuf, caption: String) -> Result<UploadedMessage, TgError>;
   async fn copy_messages(&self, from_chat_id: ChatId, to_chat_id: ChatId, message_ids: Vec<MessageId>)
     -> Result<Vec<Option<MessageId>>, TgError>;

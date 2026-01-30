@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAppStore, DirNode } from "../store/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 function containsNode(root: DirNode, id: string): boolean {
   if (root.id === id) return true;
@@ -125,12 +126,27 @@ function TreeRow({ node, depth, selectedId, collapsed, onSelect, onToggle }: Tre
 }
 
 export function FileManager({ tree }: { tree: DirNode | null }) {
-  const { createDir, renameDir, moveDir, deleteDir, setError } = useAppStore();
+  const {
+    createDir,
+    renameDir,
+    moveDir,
+    deleteDir,
+    files,
+    refreshFiles,
+    pickFiles,
+    uploadFile,
+    moveFiles,
+    deleteFiles,
+    setError
+  } = useAppStore();
   const [parentId, setParentId] = useState<string | null>(tree?.id ?? "ROOT");
   const [name, setName] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [renameValue, setRenameValue] = useState("");
   const [moveParentId, setMoveParentId] = useState<string>("ROOT");
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(() => new Set());
+  const [fileMoveTarget, setFileMoveTarget] = useState<string>("");
+  const [dropActive, setDropActive] = useState(false);
 
   useEffect(() => {
     if (!tree) return;
@@ -156,10 +172,12 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     if (!selectedNode) {
       setRenameValue("");
       setMoveParentId("ROOT");
+      setSelectedFiles(new Set());
       return;
     }
     setRenameValue(selectedNode.name);
     setMoveParentId(selectedNode.parent_id ?? "ROOT");
+    setSelectedFiles(new Set());
   }, [selectedNode]);
 
   const moveOptions = useMemo(() => {
@@ -174,6 +192,73 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   }, [tree, selectedNode]);
 
   const isRootSelected = selectedNode?.id === "ROOT";
+  const canUseFiles = Boolean(selectedNode && !isRootSelected);
+
+  useEffect(() => {
+    if (!selectedNode) return;
+    refreshFiles(selectedNode.id).catch((e) => setError(String(e)));
+  }, [selectedNode, refreshFiles, setError]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    const win = getCurrentWindow();
+    win
+      .onDragDropEvent((event) => {
+        const payload: any = event.payload;
+        if (payload.type === "over") {
+          setDropActive(true);
+        } else if (payload.type === "leave") {
+          setDropActive(false);
+        } else if (payload.type === "drop") {
+          setDropActive(false);
+          const paths = payload.paths as string[] | undefined;
+          if (!paths || paths.length === 0) return;
+          if (!selectedNode || isRootSelected) {
+            setError("Выбери папку, чтобы загрузить файлы.");
+            return;
+          }
+          (async () => {
+            try {
+              for (const path of paths) {
+                await uploadFile(selectedNode.id, path);
+              }
+              await refreshFiles(selectedNode.id);
+            } catch (e: any) {
+              setError(String(e));
+            }
+          })();
+        }
+      })
+      .then((u) => {
+        unlisten = u;
+      })
+      .catch(() => {
+        // В браузере событие может быть недоступно.
+      });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [selectedNode, isRootSelected, uploadFile, refreshFiles, setError]);
+
+  const fileMoveOptions = useMemo(() => {
+    if (!tree) return [];
+    const exclude = new Set<string>();
+    const out: FlatNode[] = [];
+    for (const child of tree.children) {
+      flattenTree(child, 0, out, exclude);
+    }
+    return out;
+  }, [tree]);
+
+  useEffect(() => {
+    if (!canUseFiles || fileMoveOptions.length === 0) {
+      setFileMoveTarget("");
+      return;
+    }
+    if (!fileMoveTarget) {
+      setFileMoveTarget(fileMoveOptions[0].id);
+    }
+  }, [canUseFiles, fileMoveOptions, fileMoveTarget]);
 
   const toggleCollapse = useMemo(
     () => (id: string) =>
@@ -323,7 +408,197 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
             </div>
           </div>
         </div>
+
+        <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
+          <b>Файлы</b>
+          {!canUseFiles ? (
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.6 }}>
+              Выбери папку в дереве, чтобы управлять файлами.
+            </div>
+          ) : (
+            <>
+              <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "center" }}>
+                <div
+                  style={{
+                    flex: 1,
+                    border: "1px dashed #bbb",
+                    borderRadius: 12,
+                    padding: "10px 12px",
+                    background: dropActive ? "#f0f7ff" : "#fafafa",
+                    color: "#333"
+                  }}
+                >
+                  {dropActive
+                    ? "Отпускай файлы, чтобы загрузить"
+                    : "Перетащи файлы сюда для загрузки"}
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!selectedNode || isRootSelected) return;
+                    try {
+                      const paths = await pickFiles();
+                      if (!paths || paths.length === 0) return;
+                      for (const path of paths) {
+                        await uploadFile(selectedNode.id, path);
+                      }
+                      await refreshFiles(selectedNode.id);
+                    } catch (e: any) {
+                      setError(String(e));
+                    }
+                  }}
+                  style={{ padding: 10, borderRadius: 10 }}
+                >
+                  Выбрать и загрузить
+                </button>
+                <div style={{ fontSize: 12, opacity: 0.6 }}>
+                  Всего: {files.length}
+                </div>
+              </div>
+
+
+              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
+                <select
+                  value={fileMoveTarget}
+                  onChange={(e) => setFileMoveTarget(e.target.value)}
+                  disabled={fileMoveOptions.length === 0}
+                  style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", background: "#fff" }}
+                >
+                  <option value="" disabled>
+                    Куда переместить…
+                  </option>
+                  {fileMoveOptions.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={async () => {
+                    if (!selectedNode) return;
+                    const ids = Array.from(selectedFiles);
+                    if (ids.length === 0 || !fileMoveTarget) return;
+                    try {
+                      await moveFiles(ids, fileMoveTarget);
+                      await refreshFiles(selectedNode.id);
+                      setSelectedFiles(new Set());
+                    } catch (e: any) {
+                      setError(String(e));
+                    }
+                  }}
+                  disabled={!fileMoveTarget || selectedFiles.size === 0}
+                  style={{ padding: 10, borderRadius: 10 }}
+                >
+                  Переместить выбранные
+                </button>
+              </div>
+
+              <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>
+                <button
+                  onClick={async () => {
+                    if (!selectedNode) return;
+                    const ids = Array.from(selectedFiles);
+                    if (ids.length === 0) return;
+                    const ok = window.confirm(`Удалить файлов: ${ids.length}?`);
+                    if (!ok) return;
+                    try {
+                      await deleteFiles(ids);
+                      await refreshFiles(selectedNode.id);
+                      setSelectedFiles(new Set());
+                    } catch (e: any) {
+                      setError(String(e));
+                    }
+                  }}
+                  disabled={selectedFiles.size === 0}
+                  style={{ padding: 10, borderRadius: 10, background: "#fee", border: "1px solid #f99" }}
+                >
+                  Удалить выбранные
+                </button>
+                <div style={{ fontSize: 12, opacity: 0.6 }}>
+                  {selectedFiles.size > 0 ? `Выбрано: ${selectedFiles.size}` : "Выбери файлы для действий"}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12, border: "1px solid #eee", borderRadius: 10, overflow: "hidden" }}>
+                {files.length === 0 ? (
+                  <div style={{ padding: 12, fontSize: 12, opacity: 0.6 }}>Файлов пока нет.</div>
+                ) : (
+                  <div>
+                    {files.map((f) => {
+                      const checked = selectedFiles.has(f.id);
+                      return (
+                        <div
+                          key={f.id}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "24px 1fr 120px 120px 120px",
+                            gap: 8,
+                            alignItems: "center",
+                            padding: "8px 10px",
+                            borderTop: "1px solid #f0f0f0"
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setSelectedFiles((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(f.id)) next.delete(f.id);
+                                else next.add(f.id);
+                                return next;
+                              });
+                            }}
+                          />
+                          <div style={{ display: "flex", flexDirection: "column" }}>
+                            <span style={{ fontWeight: 500 }}>{f.name}</span>
+                            <span style={{ fontSize: 11, opacity: 0.6 }}>#{f.hash}</span>
+                          </div>
+                          <div style={{ fontSize: 12, opacity: 0.7 }}>{formatBytes(f.size)}</div>
+                          <div style={{ fontSize: 12, opacity: 0.5 }}>{f.id.slice(0, 6)}</div>
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button
+                              onClick={async () => {
+                                const ok = window.confirm("Удалить файл?");
+                                if (!ok) return;
+                                try {
+                                  await deleteFiles([f.id]);
+                                  if (selectedNode) await refreshFiles(selectedNode.id);
+                                  setSelectedFiles((prev) => {
+                                    const next = new Set(prev);
+                                    next.delete(f.id);
+                                    return next;
+                                  });
+                                } catch (e: any) {
+                                  setError(String(e));
+                                }
+                              }}
+                              style={{ padding: "6px 10px", borderRadius: 8, background: "#fee", border: "1px solid #f99" }}
+                            >
+                              Удалить
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
+}
+
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size)) return "0 Б";
+  const units = ["Б", "КБ", "МБ", "ГБ"];
+  let value = size;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  return `${value.toFixed(value < 10 && idx > 0 ? 1 : 0)} ${units[idx]}`;
 }

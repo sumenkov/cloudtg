@@ -938,8 +938,58 @@ impl TelegramService for TdlibTelegram {
     Ok(())
   }
 
-  async fn send_file(&self, _chat_id: ChatId, _path: std::path::PathBuf, _caption: String) -> Result<UploadedMessage, TgError> {
-    Err(TgError::NotImplemented)
+  async fn edit_message_caption(&self, chat_id: ChatId, message_id: MessageId, caption: String) -> Result<(), TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "tdlib_edit_message_caption", chat_id = chat_id, message_id = message_id, "Обновление подписи сообщения");
+
+    let _ = self
+      .request(
+        json!({
+          "@type":"editMessageCaption",
+          "chat_id": chat_id,
+          "message_id": message_id,
+          "caption": { "@type":"formattedText", "text": caption },
+          "show_caption_above_media": false
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+
+    Ok(())
+  }
+
+  async fn send_file(&self, chat_id: ChatId, path: std::path::PathBuf, caption: String) -> Result<UploadedMessage, TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "tdlib_send_file", chat_id = chat_id, "Отправка файла");
+
+    let path_str = path.to_string_lossy().to_string();
+    let res = self
+      .request(
+        json!({
+          "@type":"sendMessage",
+          "chat_id": chat_id,
+          "input_message_content": {
+            "@type":"inputMessageDocument",
+            "document": { "@type":"inputFileLocal", "path": path_str },
+            "caption": { "@type":"formattedText", "text": caption },
+            "disable_content_type_detection": false
+          }
+        }),
+        Duration::from_secs(60)
+      )
+      .await?;
+
+    let msg_id = res
+      .get("id")
+      .and_then(|v| v.as_i64())
+      .ok_or_else(|| TgError::Other("TDLib не вернул message.id".into()))?;
+    let chat_id = res
+      .get("chat_id")
+      .and_then(|v| v.as_i64())
+      .unwrap_or(chat_id);
+
+    tracing::info!(event = "tdlib_send_file_done", chat_id = chat_id, message_id = msg_id, "Файл отправлен");
+    Ok(UploadedMessage { chat_id, message_id: msg_id, caption_or_text: caption })
   }
 
   async fn copy_messages(

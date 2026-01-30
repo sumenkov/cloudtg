@@ -82,6 +82,10 @@ impl TelegramService for MockTelegram {
     Ok(())
   }
 
+  async fn edit_message_caption(&self, _chat_id: ChatId, _message_id: MessageId, _caption: String) -> Result<(), TgError> {
+    Ok(())
+  }
+
   async fn send_file(&self, chat_id: ChatId, path: PathBuf, caption: String) -> Result<UploadedMessage, TgError> {
     let uploads_dir = self.paths.cache_dir.join("mock_uploads");
     std::fs::create_dir_all(&uploads_dir).map_err(TgError::Io)?;
