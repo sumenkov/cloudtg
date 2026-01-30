@@ -40,6 +40,111 @@ pub async fn create_dir(
   Ok(id)
 }
 
+pub async fn rename_dir(
+  pool: &SqlitePool,
+  tg: &dyn TelegramService,
+  chat_id: ChatId,
+  dir_id: &str,
+  name: String
+) -> anyhow::Result<()> {
+  let name = name.trim().to_string();
+  if name.is_empty() {
+    return Err(anyhow::anyhow!("Имя папки не может быть пустым"));
+  }
+  let mut dir = fetch_dir(pool, dir_id).await?;
+  if dir.name == name && dir.tg_msg_id.is_some() {
+    return Ok(());
+  }
+  let msg_id = ensure_dir_message(tg, chat_id, &dir, dir.parent_id.clone(), &name).await?;
+  let updated_at = Utc::now().timestamp();
+  sqlx::query("UPDATE directories SET name = ?, tg_msg_id = ?, updated_at = ? WHERE id = ?")
+    .bind(&name)
+    .bind(msg_id)
+    .bind(updated_at)
+    .bind(dir_id)
+    .execute(pool)
+    .await?;
+  dir.name = name;
+  dir.tg_msg_id = Some(msg_id);
+  Ok(())
+}
+
+pub async fn move_dir(
+  pool: &SqlitePool,
+  tg: &dyn TelegramService,
+  chat_id: ChatId,
+  dir_id: &str,
+  parent_id: Option<String>
+) -> anyhow::Result<()> {
+  let mut dir = fetch_dir(pool, dir_id).await?;
+  let parent_id = normalize_parent_id(parent_id);
+
+  if let Some(pid) = parent_id.as_deref() {
+    if pid == dir_id {
+      return Err(anyhow::anyhow!("Нельзя переместить папку внутрь самой себя"));
+    }
+    if !dir_exists(pool, pid).await? {
+      return Err(anyhow::anyhow!("Родительская папка не найдена"));
+    }
+    if has_ancestor(pool, pid, dir_id).await? {
+      return Err(anyhow::anyhow!("Нельзя переместить папку в ее подпапку"));
+    }
+  }
+
+  if dir.parent_id == parent_id && dir.tg_msg_id.is_some() {
+    return Ok(());
+  }
+  let msg_id = ensure_dir_message(tg, chat_id, &dir, parent_id.clone(), &dir.name).await?;
+  let updated_at = Utc::now().timestamp();
+  sqlx::query("UPDATE directories SET parent_id = ?, tg_msg_id = ?, updated_at = ? WHERE id = ?")
+    .bind(parent_id.as_deref())
+    .bind(msg_id)
+    .bind(updated_at)
+    .bind(dir_id)
+    .execute(pool)
+    .await?;
+  dir.parent_id = parent_id;
+  dir.tg_msg_id = Some(msg_id);
+  Ok(())
+}
+
+pub async fn delete_dir(
+  pool: &SqlitePool,
+  tg: &dyn TelegramService,
+  chat_id: ChatId,
+  dir_id: &str
+) -> anyhow::Result<()> {
+  let dir = fetch_dir(pool, dir_id).await?;
+  let child_count: i64 = sqlx::query("SELECT COUNT(1) as cnt FROM directories WHERE parent_id = ?")
+    .bind(dir_id)
+    .fetch_one(pool)
+    .await?
+    .get::<i64,_>("cnt");
+  let file_count: i64 = sqlx::query("SELECT COUNT(1) as cnt FROM files WHERE dir_id = ?")
+    .bind(dir_id)
+    .fetch_one(pool)
+    .await?
+    .get::<i64,_>("cnt");
+
+  if child_count > 0 || file_count > 0 {
+    return Err(anyhow::anyhow!(
+      "Папка не пустая: файлов={file_count}, подпапок={child_count}"
+    ));
+  }
+
+  if let Some(msg_id) = dir.tg_msg_id {
+    if let Err(e) = tg.delete_messages(chat_id, vec![msg_id], true).await {
+      tracing::warn!(event = "dir_delete_message_failed", dir_id = dir_id, error = %e, "Не удалось удалить сообщение папки");
+    }
+  }
+
+  sqlx::query("DELETE FROM directories WHERE id = ?")
+    .bind(dir_id)
+    .execute(pool)
+    .await?;
+  Ok(())
+}
+
 pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
   let rows = sqlx::query("SELECT id, parent_id, name FROM directories ORDER BY name")
     .fetch_all(pool)
@@ -93,4 +198,85 @@ pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
   };
 
   Ok(rebuilt_root)
+}
+
+#[derive(Clone)]
+struct DirRow {
+  id: String,
+  parent_id: Option<String>,
+  name: String,
+  tg_msg_id: Option<i64>
+}
+
+async fn fetch_dir(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<DirRow> {
+  let row = sqlx::query("SELECT id, parent_id, name, tg_msg_id FROM directories WHERE id = ?")
+    .bind(dir_id)
+    .fetch_optional(pool)
+    .await?;
+  let Some(row) = row else {
+    return Err(anyhow::anyhow!("Папка не найдена"));
+  };
+  let parent_id = normalize_parent_id(row.try_get::<String,_>("parent_id").ok());
+  Ok(DirRow {
+    id: row.get::<String,_>("id"),
+    parent_id,
+    name: row.get::<String,_>("name"),
+    tg_msg_id: row.try_get::<i64,_>("tg_msg_id").ok()
+  })
+}
+
+fn normalize_parent_id(raw: Option<String>) -> Option<String> {
+  raw.filter(|p| !p.trim().is_empty() && p != "ROOT")
+}
+
+async fn dir_exists(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<bool> {
+  let count: i64 = sqlx::query("SELECT COUNT(1) as cnt FROM directories WHERE id = ?")
+    .bind(dir_id)
+    .fetch_one(pool)
+    .await?
+    .get::<i64,_>("cnt");
+  Ok(count > 0)
+}
+
+async fn has_ancestor(pool: &SqlitePool, start_id: &str, target_id: &str) -> anyhow::Result<bool> {
+  let mut current: Option<String> = Some(start_id.to_string());
+  while let Some(id) = current {
+    if id == target_id {
+      return Ok(true);
+    }
+    let row = sqlx::query("SELECT parent_id FROM directories WHERE id = ?")
+      .bind(&id)
+      .fetch_optional(pool)
+      .await?;
+    current = row
+      .and_then(|r| r.try_get::<String,_>("parent_id").ok())
+      .and_then(|p| normalize_parent_id(Some(p)));
+  }
+  Ok(false)
+}
+
+async fn ensure_dir_message(
+  tg: &dyn TelegramService,
+  chat_id: ChatId,
+  dir: &DirRow,
+  parent_id: Option<String>,
+  name: &str
+) -> anyhow::Result<i64> {
+  let parent_tag = parent_id.unwrap_or_else(|| "ROOT".to_string());
+  let msg = make_dir_message(&DirMeta { dir_id: dir.id.clone(), parent_id: parent_tag, name: name.to_string() });
+
+  if let Some(msg_id) = dir.tg_msg_id {
+    match tg.edit_message_text(chat_id, msg_id, msg.clone()).await {
+      Ok(()) => return Ok(msg_id),
+      Err(e) => {
+        tracing::warn!(event = "dir_message_edit_failed", dir_id = dir.id, error = %e, "Не удалось обновить сообщение папки, отправляю новое");
+        let uploaded = tg.send_dir_message(chat_id, msg).await?;
+        let _ = tg.delete_messages(chat_id, vec![msg_id], true).await;
+        return Ok(uploaded.message_id);
+      }
+    }
+  }
+
+  let uploaded = tg.send_dir_message(chat_id, msg).await?;
+  Ok(uploaded.message_id)
 }

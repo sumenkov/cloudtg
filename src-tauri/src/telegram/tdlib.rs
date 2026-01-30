@@ -914,6 +914,30 @@ impl TelegramService for TdlibTelegram {
     Ok(UploadedMessage { chat_id, message_id: msg_id, caption_or_text: text })
   }
 
+  async fn edit_message_text(&self, chat_id: ChatId, message_id: MessageId, text: String) -> Result<(), TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "tdlib_edit_message", chat_id = chat_id, message_id = message_id, "Обновление текста сообщения");
+
+    let _ = self
+      .request(
+        json!({
+          "@type":"editMessageText",
+          "chat_id": chat_id,
+          "message_id": message_id,
+          "input_message_content": {
+            "@type":"inputMessageText",
+            "text": { "@type":"formattedText", "text": text },
+            "disable_web_page_preview": true,
+            "clear_draft": false
+          }
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+
+    Ok(())
+  }
+
   async fn send_file(&self, _chat_id: ChatId, _path: std::path::PathBuf, _caption: String) -> Result<UploadedMessage, TgError> {
     Err(TgError::NotImplemented)
   }
@@ -960,6 +984,25 @@ impl TelegramService for TdlibTelegram {
       return Ok(out);
     }
     Err(TgError::Other("TDLib не вернул список сообщений при копировании".into()))
+  }
+
+  async fn delete_messages(&self, chat_id: ChatId, message_ids: Vec<MessageId>, revoke: bool) -> Result<(), TgError> {
+    self.ensure_authorized().await?;
+    if message_ids.is_empty() {
+      return Ok(());
+    }
+    let _ = self
+      .request(
+        json!({
+          "@type":"deleteMessages",
+          "chat_id": chat_id,
+          "message_ids": message_ids,
+          "revoke": revoke
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+    Ok(())
   }
 
   async fn download_message_file(&self, _chat_id: ChatId, _message_id: MessageId, _target: std::path::PathBuf)

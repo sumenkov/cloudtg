@@ -172,6 +172,51 @@ pub async fn dir_create(app: AppHandle, state: State<'_, AppState>, parent_id: O
 }
 
 #[tauri::command]
+pub async fn dir_rename(app: AppHandle, state: State<'_, AppState>, dir_id: String, name: String) -> Result<(), String> {
+  info!(event = "dir_rename", dir_id = dir_id.as_str(), "Переименование директории");
+  if dir_id == "ROOT" {
+    return Err("Нельзя переименовать корневую папку".into());
+  }
+  if name.trim().is_empty() {
+    return Err("Имя папки не может быть пустым".into());
+  }
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+  dirs::rename_dir(db.pool(), tg.as_ref(), chat_id, &dir_id, name).await.map_err(map_err)?;
+  let _ = app.emit("tree_updated", ());
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn dir_move(app: AppHandle, state: State<'_, AppState>, dir_id: String, parent_id: Option<String>) -> Result<(), String> {
+  info!(event = "dir_move", dir_id = dir_id.as_str(), parent_id = parent_id.as_deref().unwrap_or("ROOT"), "Перемещение директории");
+  if dir_id == "ROOT" {
+    return Err("Нельзя перемещать корневую папку".into());
+  }
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+  dirs::move_dir(db.pool(), tg.as_ref(), chat_id, &dir_id, parent_id).await.map_err(map_err)?;
+  let _ = app.emit("tree_updated", ());
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn dir_delete(app: AppHandle, state: State<'_, AppState>, dir_id: String) -> Result<(), String> {
+  info!(event = "dir_delete", dir_id = dir_id.as_str(), "Удаление директории");
+  if dir_id == "ROOT" {
+    return Err("Нельзя удалить корневую папку".into());
+  }
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+  dirs::delete_dir(db.pool(), tg.as_ref(), chat_id, &dir_id).await.map_err(map_err)?;
+  let _ = app.emit("tree_updated", ());
+  Ok(())
+}
+
+#[tauri::command]
 pub async fn dir_list_tree(state: State<'_, AppState>) -> Result<crate::app::models::DirNode, String> {
   let db = state.db().map_err(map_err)?;
   dirs::list_tree(db.pool()).await.map_err(map_err)

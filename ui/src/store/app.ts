@@ -48,6 +48,9 @@ type State = {
   refreshSettings: () => Promise<void>;
   refreshTree: () => Promise<void>;
   createDir: (parentId: string | null, name: string) => Promise<void>;
+  renameDir: (dirId: string, name: string) => Promise<void>;
+  moveDir: (dirId: string, parentId: string | null) => Promise<void>;
+  deleteDir: (dirId: string) => Promise<void>;
 };
 
 export const useAppStore = create<State>((set, get) => ({
@@ -127,6 +130,18 @@ export const useAppStore = create<State>((set, get) => ({
 
   createDir: async (parentId, name) => {
     await invokeSafe("dir_create", { parentId, name });
+    await get().refreshTree();
+  },
+  renameDir: async (dirId, name) => {
+    await invokeSafe("dir_rename", { dirId, name });
+    await get().refreshTree();
+  },
+  moveDir: async (dirId, parentId) => {
+    await invokeSafe("dir_move", { dirId, parentId });
+    await get().refreshTree();
+  },
+  deleteDir: async (dirId) => {
+    await invokeSafe("dir_delete", { dirId });
     await get().refreshTree();
   }
 }));

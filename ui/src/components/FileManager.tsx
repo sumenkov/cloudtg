@@ -9,6 +9,33 @@ function containsNode(root: DirNode, id: string): boolean {
   return false;
 }
 
+function findNode(root: DirNode, id: string): DirNode | null {
+  if (root.id === id) return root;
+  for (const c of root.children) {
+    const found = findNode(c, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function collectIds(node: DirNode, out: Set<string>) {
+  out.add(node.id);
+  for (const c of node.children) collectIds(c, out);
+}
+
+type FlatNode = { id: string; label: string };
+
+function flattenTree(node: DirNode, depth: number, out: FlatNode[], exclude: Set<string>) {
+  if (!exclude.has(node.id)) {
+    const prefix = depth > 0 ? "—".repeat(depth) + " " : "";
+    const label = node.id === "ROOT" ? "Корень" : `${prefix}${node.name}`;
+    out.push({ id: node.id, label });
+  }
+  for (const c of node.children) {
+    flattenTree(c, depth + 1, out, exclude);
+  }
+}
+
 type TreeRowProps = {
   node: DirNode;
   depth: number;
@@ -98,10 +125,12 @@ function TreeRow({ node, depth, selectedId, collapsed, onSelect, onToggle }: Tre
 }
 
 export function FileManager({ tree }: { tree: DirNode | null }) {
-  const { createDir, setError } = useAppStore();
+  const { createDir, renameDir, moveDir, deleteDir, setError } = useAppStore();
   const [parentId, setParentId] = useState<string | null>(tree?.id ?? "ROOT");
   const [name, setName] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [renameValue, setRenameValue] = useState("");
+  const [moveParentId, setMoveParentId] = useState<string>("ROOT");
 
   useEffect(() => {
     if (!tree) return;
@@ -117,6 +146,34 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       return next;
     });
   }, [tree]);
+
+  const selectedNode = useMemo(() => {
+    if (!tree || !parentId) return null;
+    return findNode(tree, parentId);
+  }, [tree, parentId]);
+
+  useEffect(() => {
+    if (!selectedNode) {
+      setRenameValue("");
+      setMoveParentId("ROOT");
+      return;
+    }
+    setRenameValue(selectedNode.name);
+    setMoveParentId(selectedNode.parent_id ?? "ROOT");
+  }, [selectedNode]);
+
+  const moveOptions = useMemo(() => {
+    if (!tree) return [];
+    const exclude = new Set<string>();
+    if (selectedNode) {
+      collectIds(selectedNode, exclude);
+    }
+    const out: FlatNode[] = [];
+    flattenTree(tree, 0, out, exclude);
+    return out;
+  }, [tree, selectedNode]);
+
+  const isRootSelected = selectedNode?.id === "ROOT";
 
   const toggleCollapse = useMemo(
     () => (id: string) =>
@@ -180,8 +237,91 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
           </button>
         </div>
 
-        <div style={{ marginTop: 14, opacity: 0.8 }}>
-          Дальше: список файлов, upload/download, поиск, импорт.
+        <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
+          <b>Переименование</b>
+          <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
+            <input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              placeholder="Новое имя..."
+              disabled={!selectedNode || isRootSelected}
+              style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+            />
+            <button
+              onClick={async () => {
+                if (!selectedNode || isRootSelected) return;
+                if (!renameValue.trim()) return;
+                try {
+                  await renameDir(selectedNode.id, renameValue.trim());
+                } catch (e: any) {
+                  setError(String(e));
+                }
+              }}
+              disabled={!selectedNode || isRootSelected}
+              style={{ padding: 10, borderRadius: 10 }}
+            >
+              Переименовать
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
+          <b>Перемещение</b>
+          <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
+            <select
+              value={moveParentId}
+              onChange={(e) => setMoveParentId(e.target.value)}
+              disabled={!selectedNode || isRootSelected || moveOptions.length === 0}
+              style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", background: "#fff" }}
+            >
+              {moveOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={async () => {
+                if (!selectedNode || isRootSelected) return;
+                const target = moveParentId === "ROOT" ? null : moveParentId;
+                try {
+                  await moveDir(selectedNode.id, target);
+                } catch (e: any) {
+                  setError(String(e));
+                }
+              }}
+              disabled={!selectedNode || isRootSelected || moveOptions.length === 0}
+              style={{ padding: 10, borderRadius: 10 }}
+            >
+              Переместить
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
+          <b>Удаление</b>
+          <div style={{ marginTop: 8 }}>
+            <button
+              onClick={async () => {
+                if (!selectedNode || isRootSelected) return;
+                const ok = window.confirm("Удалить папку? Действие нельзя отменить.");
+                if (!ok) return;
+                try {
+                  await deleteDir(selectedNode.id);
+                  setParentId("ROOT");
+                } catch (e: any) {
+                  setError(String(e));
+                }
+              }}
+              disabled={!selectedNode || isRootSelected}
+              style={{ padding: 10, borderRadius: 10, background: "#fee", border: "1px solid #f99" }}
+            >
+              Удалить папку
+            </button>
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
+              Удалять можно только пустые папки.
+            </div>
+          </div>
         </div>
       </div>
     </div>

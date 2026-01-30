@@ -78,6 +78,10 @@ impl TelegramService for MockTelegram {
     Ok(msg)
   }
 
+  async fn edit_message_text(&self, _chat_id: ChatId, _message_id: MessageId, _text: String) -> Result<(), TgError> {
+    Ok(())
+  }
+
   async fn send_file(&self, chat_id: ChatId, path: PathBuf, caption: String) -> Result<UploadedMessage, TgError> {
     let uploads_dir = self.paths.cache_dir.join("mock_uploads");
     std::fs::create_dir_all(&uploads_dir).map_err(TgError::Io)?;
@@ -111,5 +115,9 @@ impl TelegramService for MockTelegram {
       std::fs::write(&target, b"mock download: tdlib not enabled\n").map_err(TgError::Io)?;
     }
     Ok(target)
+  }
+
+  async fn delete_messages(&self, _chat_id: ChatId, _message_ids: Vec<MessageId>, _revoke: bool) -> Result<(), TgError> {
+    Ok(())
   }
 }
