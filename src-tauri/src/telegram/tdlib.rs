@@ -1261,7 +1261,7 @@ fn http_agent() -> ureq::Agent {
 
 fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
   let mut stack = vec![root.to_path_buf()];
-  let names = [
+  let exact_names = [
     "libtdjson.so",
     "libtdjson.so.1",
     "libtdjson.dylib",
@@ -1278,7 +1278,10 @@ fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
       if path.is_dir() {
         stack.push(path);
       } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if names.iter().any(|n| n == &name) {
+        if exact_names.iter().any(|n| n == &name)
+          || name.starts_with("libtdjson.so")
+          || name.starts_with("libtdjson.dylib")
+        {
           return Some(path);
         }
       }
