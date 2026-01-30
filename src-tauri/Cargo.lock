@@ -646,6 +646,7 @@ dependencies = [
  "dotenvy",
  "flate2",
  "hex",
+ "image",
  "keyring",
  "libloading 0.8.9",
  "once_cell",

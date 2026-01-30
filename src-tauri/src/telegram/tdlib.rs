@@ -1,7 +1,7 @@
 use std::{
   collections::HashMap,
   ffi::{CStr, CString},
-  io::{BufRead, BufReader, Read, Write},
+  io::{BufRead, BufReader, Read, Write, Cursor},
   os::raw::{c_char, c_double, c_int, c_void},
   path::{Path, PathBuf},
   process::{Command, Stdio},
@@ -19,6 +19,8 @@ use tokio::sync::oneshot;
 use flate2::read::GzDecoder;
 use tar::Archive;
 use zip::ZipArchive;
+use image::{DynamicImage, ImageFormat, RgbaImage};
+use image::imageops::FilterType;
 
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
@@ -179,6 +181,24 @@ fn normalize_session_name(raw: &str) -> String {
 
 fn app_icon_bytes() -> &'static [u8] {
   include_bytes!("../../icons/icon.png")
+}
+
+const TELEGRAM_ICON_SIZE: u32 = 512;
+const TELEGRAM_ICON_SAFE_SCALE: f32 = 0.70;
+
+fn build_telegram_icon(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+  let decoded = image::load_from_memory(bytes)?;
+  let size = TELEGRAM_ICON_SIZE;
+  let safe = ((size as f32) * TELEGRAM_ICON_SAFE_SCALE).round().max(1.0) as u32;
+  let resized = decoded.resize(safe, safe, FilterType::Lanczos3);
+  let mut canvas = RgbaImage::from_pixel(size, size, image::Rgba([0, 0, 0, 0]));
+  let x = (size - resized.width()) / 2;
+  let y = (size - resized.height()) / 2;
+  image::imageops::overlay(&mut canvas, &resized, x.into(), y.into());
+  let mut out = Vec::new();
+  let mut cursor = Cursor::new(&mut out);
+  DynamicImage::ImageRgba8(canvas).write_to(&mut cursor, ImageFormat::Png)?;
+  Ok(out)
 }
 
 fn extract_text(content: &Value) -> Option<String> {
@@ -547,8 +567,14 @@ impl TdlibTelegram {
   }
 
   fn ensure_icon_file(&self) -> Result<PathBuf, TgError> {
-    let icon_path = self.paths.cache_dir.join("cloudtg-icon.png");
-    let bytes = app_icon_bytes();
+    let icon_path = self.paths.cache_dir.join("cloudtg-icon-telegram.png");
+    let bytes = match build_telegram_icon(app_icon_bytes()) {
+      Ok(icon) => icon,
+      Err(e) => {
+        tracing::warn!(event = "storage_channel_icon_prepare_failed", error = %e, "Не удалось подготовить иконку канала");
+        app_icon_bytes().to_vec()
+      }
+    };
     if let Ok(existing) = std::fs::read(&icon_path) {
       if existing == bytes {
         return Ok(icon_path);
