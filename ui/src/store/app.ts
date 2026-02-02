@@ -5,6 +5,7 @@ export type DirNode = {
   id: string;
   name: string;
   parent_id: string | null;
+  is_broken: boolean;
   children: DirNode[];
 };
 
@@ -17,6 +18,7 @@ export type FileItem = {
   tg_chat_id: number;
   tg_msg_id: number;
   created_at: number;
+  is_broken: boolean;
 };
 
 export type ChatItem = {

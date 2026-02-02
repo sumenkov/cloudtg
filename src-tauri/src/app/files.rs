@@ -35,12 +35,13 @@ pub struct FileItem {
   pub hash: String,
   pub tg_chat_id: i64,
   pub tg_msg_id: i64,
-  pub created_at: i64
+  pub created_at: i64,
+  pub is_broken: bool
 }
 
 pub async fn list_files(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Vec<FileItem>> {
   let rows = sqlx::query(
-    "SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at FROM files WHERE dir_id = ? ORDER BY name"
+    "SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken FROM files WHERE dir_id = ? ORDER BY name"
   )
     .bind(dir_id)
     .fetch_all(pool)
@@ -56,7 +57,8 @@ pub async fn list_files(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Vec<F
       hash: row.get::<String,_>("hash"),
       tg_chat_id: row.get::<i64,_>("tg_chat_id"),
       tg_msg_id: row.get::<i64,_>("tg_msg_id"),
-      created_at: row.get::<i64,_>("created_at")
+      created_at: row.get::<i64,_>("created_at"),
+      is_broken: row.get::<i64,_>("is_broken") != 0
     });
   }
   Ok(out)
@@ -71,7 +73,7 @@ pub async fn search_files(
   limit: Option<i64>
 ) -> anyhow::Result<Vec<FileItem>> {
   let mut builder = QueryBuilder::new(
-    "SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at FROM files"
+    "SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken FROM files"
   );
   let mut separated = builder.separated(" WHERE ");
 
@@ -114,7 +116,8 @@ pub async fn search_files(
       hash: row.get::<String,_>("hash"),
       tg_chat_id: row.get::<i64,_>("tg_chat_id"),
       tg_msg_id: row.get::<i64,_>("tg_msg_id"),
-      created_at: row.get::<i64,_>("created_at")
+      created_at: row.get::<i64,_>("created_at"),
+      is_broken: row.get::<i64,_>("is_broken") != 0
     });
   }
   Ok(out)
@@ -154,9 +157,9 @@ pub async fn upload_file(
   let created_at = Utc::now().timestamp();
 
   sqlx::query(
-    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET dir_id=excluded.dir_id, name=excluded.name, size=excluded.size, hash=excluded.hash, tg_chat_id=excluded.tg_chat_id, tg_msg_id=excluded.tg_msg_id"
+    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0)
+     ON CONFLICT(id) DO UPDATE SET dir_id=excluded.dir_id, name=excluded.name, size=excluded.size, hash=excluded.hash, tg_chat_id=excluded.tg_chat_id, tg_msg_id=excluded.tg_msg_id, is_broken=0"
   )
     .bind(&id)
     .bind(dir_id)
@@ -211,7 +214,7 @@ pub async fn move_file(
 
   let mut edit_error = match tg.edit_message_caption(msg_chat_id, msg_id, caption.clone()).await {
     Ok(()) => {
-      sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+      sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
         .bind(new_dir_id)
         .bind(msg_chat_id)
         .bind(msg_id)
@@ -235,7 +238,7 @@ pub async fn move_file(
     if found_chat_id != msg_chat_id || found_msg_id != msg_id {
       msg_chat_id = found_chat_id;
       msg_id = found_msg_id;
-      sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+      sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
         .bind(msg_chat_id)
         .bind(msg_id)
         .bind(file_id)
@@ -244,7 +247,7 @@ pub async fn move_file(
     }
     match tg.edit_message_caption(msg_chat_id, msg_id, caption.clone()).await {
       Ok(()) => {
-        sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+        sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
           .bind(new_dir_id)
           .bind(msg_chat_id)
           .bind(msg_id)
@@ -262,7 +265,7 @@ pub async fn move_file(
   let resend_error = match tg.send_file_from_message(msg_chat_id, msg_id, caption.clone()).await {
     Ok(uploaded) => {
       let _ = tg.delete_messages(msg_chat_id, vec![msg_id], true).await;
-      sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+      sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
         .bind(new_dir_id)
         .bind(uploaded.chat_id)
         .bind(uploaded.message_id)
@@ -316,7 +319,7 @@ pub async fn move_file(
 
   let _ = tg.delete_messages(msg_chat_id, vec![msg_id], true).await;
 
-  sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+  sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
     .bind(new_dir_id)
     .bind(msg_chat_id)
     .bind(new_msg_id)
@@ -446,7 +449,7 @@ pub async fn download_file(
     if found_chat_id != msg_chat_id || found_msg_id != msg_id {
       msg_chat_id = found_chat_id;
       msg_id = found_msg_id;
-      sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+      sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
         .bind(msg_chat_id)
         .bind(msg_id)
         .bind(file_id)

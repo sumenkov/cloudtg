@@ -14,7 +14,7 @@ type TgSettingsView = {
 };
 
 export function Settings({ onClose }: { onClose?: () => void }) {
-  const { setError, refreshAuth, refreshSettings, tdlibBuild, tdlibLogs, tgSettings } = useAppStore();
+  const { setError, refreshAuth, refreshSettings, refreshTree, tdlibBuild, tdlibLogs, tgSettings } = useAppStore();
   const creds = tgSettings.credentials;
   const [tdlibPath, setTdlibPath] = useState("");
   const [apiId, setApiId] = useState("");
@@ -27,6 +27,8 @@ export function Settings({ onClose }: { onClose?: () => void }) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [reconcileStatus, setReconcileStatus] = useState<string | null>(null);
+  const [reconcileBusy, setReconcileBusy] = useState(false);
   const buildState = tdlibBuild.state;
   const isBuilding =
     buildState === "start" ||
@@ -205,6 +207,36 @@ export function Settings({ onClose }: { onClose?: () => void }) {
           Можно оставить пустым, если библиотека лежит рядом с бинарём приложения.
         </div>
       </label>
+
+      <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
+        <b>Реконсайл последних 100 сообщений</b>
+        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+          Проверяет последние сообщения в канале хранения и помечает битые записи.
+        </div>
+        <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            onClick={async () => {
+              try {
+                setReconcileBusy(true);
+                setReconcileStatus("Проверяю...");
+                const res = await invokeSafe<{ message: string }>("tg_reconcile_recent", { limit: 100 });
+                setReconcileStatus(res.message || "Готово.");
+                await refreshTree();
+              } catch (e: any) {
+                setReconcileStatus("Не удалось выполнить реконсайл");
+                setError(String(e));
+              } finally {
+                setReconcileBusy(false);
+              }
+            }}
+            disabled={reconcileBusy}
+            style={{ padding: 10, borderRadius: 10 }}
+          >
+            Запустить проверку
+          </button>
+          {reconcileStatus ? <div style={{ fontSize: 12, opacity: 0.7 }}>{reconcileStatus}</div> : null}
+        </div>
+      </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button

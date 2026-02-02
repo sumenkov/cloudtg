@@ -43,6 +43,7 @@ export default function App() {
           syncStartedRef.current = true;
           try {
             await invokeSafe("tg_sync_storage");
+            await invokeSafe("tg_reconcile_recent", { limit: 100 });
             await refreshTree();
           } catch (e: any) {
             setError(String(e));
@@ -58,6 +59,7 @@ export default function App() {
                 syncStartedRef.current = true;
                 try {
                   await invokeSafe("tg_sync_storage");
+                  await invokeSafe("tg_reconcile_recent", { limit: 100 });
                   await refreshTree();
                 } catch (e: any) {
                   setError(String(e));

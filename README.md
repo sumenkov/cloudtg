@@ -110,8 +110,85 @@ npm run tdlib:fetch
 - Node.js 18+ (или 20+)
 - Rust stable (edition 2021)
 
-Для запуска Tauri нужны системные зависимости (WebView2/Visual Studio Build Tools на Windows; webkit2gtk на Linux и т.д.).
-Если на этом шаге будут ошибки, просто покажи их мне, я скажу точные пакеты под твою ОС.
+#### Системные зависимости Tauri (Linux/macOS/Windows)
+Linux (Debian/Ubuntu):  
+```bash
+sudo apt update
+sudo apt install -y pkg-config libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+Если видишь ошибку вида `glib-sys ... pkg-config`, значит не хватает `pkg-config` и/или `libglib2.0-dev`.
+
+macOS:  
+```bash
+xcode-select --install
+```
+Если сборка ругается на `pkg-config`, установи:
+```bash
+brew install pkg-config
+```
+
+Windows 10/11:  
+- Нужен WebView2 Runtime (обычно уже установлен в системе).
+- Нужны Visual Studio Build Tools с компонентом C++ и Windows SDK.
+- Через winget можно поставить инсталлер Build Tools:
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools
+```
+
+#### npm (нужен для сборки и запуска)
+Проект использует npm‑скрипты, поэтому нужен `npm` (он идёт вместе с Node.js).
+
+Linux (Debian/Ubuntu):  
+```bash
+sudo apt update
+sudo apt install -y nodejs npm
+```
+
+macOS (Homebrew):  
+```bash
+brew install node
+```
+
+Windows 10/11:  
+Официальный установщик Node.js (LTS) **или** через winget:
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+Проверь установку:
+```bash
+node -v
+npm -v
+```
+
+#### Rust (cargo нужен для Tauri)
+Tauri использует Rust toolchain и команду `cargo`. Установи Rust stable.
+
+Linux (Debian/Ubuntu):  
+```bash
+sudo apt update
+sudo apt install -y curl build-essential
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+macOS (Homebrew):  
+```bash
+brew install rustup-init
+rustup-init -y
+source "$HOME/.cargo/env"
+```
+
+Windows 10/11:  
+Официальный rustup‑инсталлер **или** через winget:
+```powershell
+winget install Rustlang.Rustup
+```
+
+Проверь установку:
+```bash
+cargo --version
+```
 
 ### 2) Запусти
 ```bash

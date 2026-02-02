@@ -145,8 +145,8 @@ async fn import_untagged_file(
 
   let created_at = if msg.date > 0 { msg.date } else { Utc::now().timestamp() };
   let inserted = sqlx::query(
-    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0)"
   )
     .bind(&file_id)
     .bind(&target.0)
@@ -227,8 +227,8 @@ pub async fn upsert_dir(pool: &SqlitePool, meta: &crate::fsmeta::DirMeta, msg_id
     ensure_dir_placeholder(pool, pid, date).await?;
   }
   sqlx::query(
-    "INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at) VALUES(?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id, name=excluded.name, tg_msg_id=excluded.tg_msg_id, updated_at=excluded.updated_at"
+    "INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at, is_broken) VALUES(?, ?, ?, ?, ?, 0)
+     ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id, name=excluded.name, tg_msg_id=excluded.tg_msg_id, updated_at=excluded.updated_at, is_broken=0"
   )
     .bind(&meta.dir_id)
     .bind(parent_id)
@@ -251,9 +251,9 @@ pub async fn upsert_file(
   ensure_dir_placeholder(pool, &meta.dir_id, date).await?;
 
   sqlx::query(
-    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET dir_id=excluded.dir_id, name=excluded.name, size=excluded.size, hash=excluded.hash, tg_chat_id=excluded.tg_chat_id, tg_msg_id=excluded.tg_msg_id"
+    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0)
+     ON CONFLICT(id) DO UPDATE SET dir_id=excluded.dir_id, name=excluded.name, size=excluded.size, hash=excluded.hash, tg_chat_id=excluded.tg_chat_id, tg_msg_id=excluded.tg_msg_id, is_broken=0"
   )
     .bind(&meta.file_id)
     .bind(&meta.dir_id)

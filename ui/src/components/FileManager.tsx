@@ -104,7 +104,23 @@ function TreeRow({ node, depth, selectedId, collapsed, onSelect, onToggle }: Tre
         >
           {marker || "•"}
         </button>
-        <span style={{ fontWeight: isRoot ? 700 : 500, flex: 1 }}>{label}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+          <span style={{ fontWeight: isRoot ? 700 : 500 }}>{label}</span>
+          {!isRoot && node.is_broken ? (
+            <span
+              style={{
+                fontSize: 11,
+                color: "#b00020",
+                border: "1px solid #f2b8b8",
+                background: "#fff3f3",
+                borderRadius: 999,
+                padding: "1px 6px"
+              }}
+            >
+              битая
+            </span>
+          ) : null}
+        </div>
         {!isRoot && <span style={{ opacity: 0.5, fontSize: 12 }}>{node.id.slice(0, 6)}</span>}
       </div>
       {hasChildren && !isCollapsed && (
@@ -875,7 +891,23 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                             }}
                           />
                           <div style={{ display: "flex", flexDirection: "column" }}>
-                            <span style={{ fontWeight: 500 }}>{f.name}</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontWeight: 500 }}>{f.name}</span>
+                              {f.is_broken ? (
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    color: "#b00020",
+                                    border: "1px solid #f2b8b8",
+                                    background: "#fff3f3",
+                                    borderRadius: 999,
+                                    padding: "1px 6px"
+                                  }}
+                                >
+                                  битый
+                                </span>
+                              ) : null}
+                            </div>
                             <span style={{ fontSize: 11, opacity: 0.6 }}>#{f.hash}</span>
                           </div>
                           <div style={{ fontSize: 12, opacity: 0.7 }}>{formatBytes(f.size)}</div>

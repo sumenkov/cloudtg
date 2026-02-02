@@ -4,7 +4,7 @@ use sqlx::Row;
 use chrono::Utc;
 use serde::Deserialize;
 use crate::state::{AppState, AuthState};
-use crate::app::{dirs, sync, files, indexer};
+use crate::app::{dirs, sync, files, indexer, reconcile};
 use crate::settings;
 use crate::secrets::{self, CredentialsSource};
 use crate::paths::Paths;
@@ -54,6 +54,15 @@ pub struct ChatView {
 #[derive(serde::Serialize)]
 pub struct ShareResult {
   pub message: String
+}
+
+#[derive(serde::Serialize)]
+pub struct TgReconcileResult {
+  pub message: String,
+  pub scanned: i64,
+  pub marked: i64,
+  pub cleared: i64,
+  pub imported: i64
 }
 
 #[derive(Deserialize)]
@@ -473,7 +482,7 @@ pub async fn file_share_to_chat(state: State<'_, AppState>, file_id: String, cha
       if found_chat_id != from_chat_id || found_msg_id != msg_id {
         from_chat_id = found_chat_id;
         msg_id = found_msg_id;
-        sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+        sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
           .bind(from_chat_id)
           .bind(msg_id)
           .bind(&file_id)
@@ -655,6 +664,54 @@ pub async fn tg_sync_storage(app: AppHandle, state: State<'_, AppState>) -> Resu
   if let Err(err) = res.as_ref() {
     emit_sync(&app, "error", "Синхронизация не удалась", 0, None);
     tracing::error!(event = "storage_sync_error", error = err, "Ошибка синхронизации");
+  }
+
+  res
+}
+
+#[tauri::command]
+pub async fn tg_reconcile_recent(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  limit: Option<i64>
+) -> Result<TgReconcileResult, String> {
+  let res: Result<TgReconcileResult, String> = async {
+    let limit = limit.unwrap_or(100).max(1);
+    emit_sync(&app, "start", &format!("Реконсайл последних {limit} сообщений"), 0, Some(limit));
+
+    let db = state.db().map_err(map_err)?;
+    let tg = state.telegram().map_err(map_err)?;
+    let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+
+    let outcome = reconcile::reconcile_recent(db.pool(), tg.as_ref(), chat_id, limit)
+      .await
+      .map_err(map_err)?;
+
+    let marked = outcome.marked_dirs + outcome.marked_files;
+    let cleared = outcome.cleared_dirs + outcome.cleared_files;
+    let message = format!(
+      "Готово: просмотрено {}, битых отмечено {}, восстановлено {}, импортировано {}.",
+      outcome.scanned, marked, cleared, outcome.imported
+    );
+
+    emit_sync(&app, "success", "Реконсайл завершен", outcome.scanned, Some(limit));
+    if outcome.scanned > 0 && (marked > 0 || cleared > 0 || outcome.imported > 0) {
+      let _ = app.emit("tree_updated", ());
+    }
+
+    Ok(TgReconcileResult {
+      message,
+      scanned: outcome.scanned,
+      marked,
+      cleared,
+      imported: outcome.imported
+    })
+  }
+  .await;
+
+  if let Err(err) = res.as_ref() {
+    emit_sync(&app, "error", "Реконсайл не удался", 0, None);
+    tracing::error!(event = "storage_reconcile_error", error = err, "Ошибка реконсайла");
   }
 
   res
@@ -907,7 +964,7 @@ async fn flush_file_batch(
     for (idx, result) in copied.into_iter().enumerate().take(chunk.len()) {
       if let Some(new_id) = result {
         let file_id = &chunk[idx].0;
-        sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+        sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
           .bind(new_chat_id)
           .bind(new_id)
           .bind(file_id)

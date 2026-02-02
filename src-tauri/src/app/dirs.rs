@@ -30,7 +30,7 @@ pub async fn create_dir(
   let msg = make_dir_message(&DirMeta { dir_id: id.clone(), parent_id: parent_tag, name });
   let uploaded = tg.send_dir_message(chat_id, msg).await?;
 
-  sqlx::query("UPDATE directories SET tg_msg_id = ?, updated_at = ? WHERE id = ?")
+  sqlx::query("UPDATE directories SET tg_msg_id = ?, updated_at = ?, is_broken = 0 WHERE id = ?")
     .bind(uploaded.message_id)
     .bind(updated_at)
     .bind(&id)
@@ -57,7 +57,7 @@ pub async fn rename_dir(
   }
   let msg_id = ensure_dir_message(tg, chat_id, &dir, dir.parent_id.clone(), &name).await?;
   let updated_at = Utc::now().timestamp();
-  sqlx::query("UPDATE directories SET name = ?, tg_msg_id = ?, updated_at = ? WHERE id = ?")
+  sqlx::query("UPDATE directories SET name = ?, tg_msg_id = ?, updated_at = ?, is_broken = 0 WHERE id = ?")
     .bind(&name)
     .bind(msg_id)
     .bind(updated_at)
@@ -96,7 +96,7 @@ pub async fn move_dir(
   }
   let msg_id = ensure_dir_message(tg, chat_id, &dir, parent_id.clone(), &dir.name).await?;
   let updated_at = Utc::now().timestamp();
-  sqlx::query("UPDATE directories SET parent_id = ?, tg_msg_id = ?, updated_at = ? WHERE id = ?")
+  sqlx::query("UPDATE directories SET parent_id = ?, tg_msg_id = ?, updated_at = ?, is_broken = 0 WHERE id = ?")
     .bind(parent_id.as_deref())
     .bind(msg_id)
     .bind(updated_at)
@@ -155,12 +155,12 @@ pub async fn delete_dir(
 }
 
 pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
-  let rows = sqlx::query("SELECT id, parent_id, name FROM directories ORDER BY name")
+  let rows = sqlx::query("SELECT id, parent_id, name, is_broken FROM directories ORDER BY name")
     .fetch_all(pool)
     .await?;
 
   #[derive(Clone)]
-  struct RowItem { id: String, parent_id: Option<String>, name: String }
+  struct RowItem { id: String, parent_id: Option<String>, name: String, is_broken: bool }
 
   let mut items: Vec<RowItem> = Vec::with_capacity(rows.len());
   for r in rows {
@@ -169,16 +169,32 @@ pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
     items.push(RowItem {
       id: r.get::<String,_>("id"),
       parent_id,
-      name: r.get::<String,_>("name")
+      name: r.get::<String,_>("name"),
+      is_broken: r.get::<i64,_>("is_broken") != 0
     });
   }
 
   let mut map: std::collections::HashMap<String, DirNode> = std::collections::HashMap::new();
   for it in &items {
-    map.insert(it.id.clone(), DirNode { id: it.id.clone(), name: it.name.clone(), parent_id: it.parent_id.clone(), children: vec![] });
+    map.insert(
+      it.id.clone(),
+      DirNode {
+        id: it.id.clone(),
+        name: it.name.clone(),
+        parent_id: it.parent_id.clone(),
+        is_broken: it.is_broken,
+        children: vec![]
+      }
+    );
   }
 
-  let mut root = DirNode { id: "ROOT".to_string(), name: "ROOT".to_string(), parent_id: None, children: vec![] };
+  let mut root = DirNode {
+    id: "ROOT".to_string(),
+    name: "ROOT".to_string(),
+    parent_id: None,
+    is_broken: false,
+    children: vec![]
+  };
 
   for it in &items {
     if let Some(pid) = &it.parent_id {

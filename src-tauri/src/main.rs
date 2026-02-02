@@ -69,6 +69,7 @@ fn main() {
       commands::tg_test_message,
       commands::tg_create_channel,
       commands::tg_sync_storage,
+      commands::tg_reconcile_recent,
       commands::settings_get_tg,
       commands::settings_set_tg,
       commands::settings_unlock_tg
