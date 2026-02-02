@@ -2,7 +2,7 @@ use chrono::Utc;
 use sqlx::{SqlitePool, Row};
 use ulid::Ulid;
 
-use crate::fsmeta::{DirMeta, make_dir_message};
+use crate::fsmeta::{DirMeta, make_dir_message, parse_dir_message};
 use crate::telegram::{TelegramService, ChatId};
 
 use super::models::DirNode;
@@ -132,8 +132,17 @@ pub async fn delete_dir(
     ));
   }
 
+  let mut message_ids: Vec<i64> = Vec::new();
   if let Some(msg_id) = dir.tg_msg_id {
-    if let Err(e) = tg.delete_messages(chat_id, vec![msg_id], true).await {
+    message_ids.push(msg_id);
+  }
+  if let Ok(mut found) = find_dir_messages(tg, chat_id, dir_id).await {
+    message_ids.append(&mut found);
+  }
+  message_ids.sort_unstable();
+  message_ids.dedup();
+  if !message_ids.is_empty() {
+    if let Err(e) = tg.delete_messages(chat_id, message_ids, true).await {
       tracing::warn!(event = "dir_delete_message_failed", dir_id = dir_id, error = %e, "Не удалось удалить сообщение папки");
     }
   }
@@ -279,4 +288,36 @@ async fn ensure_dir_message(
 
   let uploaded = tg.send_dir_message(chat_id, msg).await?;
   Ok(uploaded.message_id)
+}
+
+async fn find_dir_messages(
+  tg: &dyn TelegramService,
+  chat_id: ChatId,
+  dir_id: &str
+) -> anyhow::Result<Vec<i64>> {
+  let query = format!("d={dir_id}");
+  let mut from_message_id: i64 = 0;
+  let mut out = Vec::new();
+
+  for _ in 0..8 {
+    let batch = match tg.search_chat_messages(chat_id, query.clone(), from_message_id, 100).await {
+      Ok(v) => v,
+      Err(_) => break
+    };
+    for msg in batch.messages {
+      if let Some(text) = msg.text.as_deref() {
+        if let Ok(meta) = parse_dir_message(text) {
+          if meta.dir_id == dir_id {
+            out.push(msg.id);
+          }
+        }
+      }
+    }
+    if batch.next_from_message_id == 0 {
+      break;
+    }
+    from_message_id = batch.next_from_message_id;
+  }
+
+  Ok(out)
 }
