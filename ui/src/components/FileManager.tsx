@@ -137,6 +137,9 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     uploadFile,
     moveFiles,
     deleteFiles,
+    downloadFile,
+    openFile,
+    openFileFolder,
     searchChats,
     shareFileToChat,
     getRecentChats,
@@ -686,7 +689,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                           key={f.id}
                           style={{
                             display: "grid",
-                            gridTemplateColumns: "24px 1fr 120px 120px 220px",
+                            gridTemplateColumns: "24px 1fr 120px 120px 420px",
                             gap: 8,
                             alignItems: "center",
                             padding: "8px 10px",
@@ -712,6 +715,42 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                           <div style={{ fontSize: 12, opacity: 0.7 }}>{formatBytes(f.size)}</div>
                           <div style={{ fontSize: 12, opacity: 0.5 }}>{f.id.slice(0, 6)}</div>
                           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await downloadFile(f.id);
+                                } catch (e: any) {
+                                  setError(String(e));
+                                }
+                              }}
+                              style={{ padding: "6px 10px", borderRadius: 8 }}
+                            >
+                              Скачать
+                            </button>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await openFile(f.id);
+                                } catch (e: any) {
+                                  setError(String(e));
+                                }
+                              }}
+                              style={{ padding: "6px 10px", borderRadius: 8 }}
+                            >
+                              Открыть
+                            </button>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await openFileFolder(f.id);
+                                } catch (e: any) {
+                                  setError(String(e));
+                                }
+                              }}
+                              style={{ padding: "6px 10px", borderRadius: 8 }}
+                            >
+                              Открыть папку
+                            </button>
                             <button
                               onClick={() => {
                                 setShareFile(f);

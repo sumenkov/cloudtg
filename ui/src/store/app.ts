@@ -75,6 +75,9 @@ type State = {
   uploadFile: (dirId: string, path: string) => Promise<void>;
   moveFiles: (fileIds: string[], dirId: string) => Promise<void>;
   deleteFiles: (fileIds: string[]) => Promise<void>;
+  downloadFile: (fileId: string) => Promise<string>;
+  openFile: (fileId: string) => Promise<void>;
+  openFileFolder: (fileId: string) => Promise<void>;
   searchChats: (query: string) => Promise<ChatItem[]>;
   shareFileToChat: (fileId: string, chatId: number) => Promise<string>;
   getRecentChats: () => Promise<ChatItem[]>;
@@ -195,6 +198,15 @@ export const useAppStore = create<State>((set, get) => ({
     } else {
       await invokeSafe("file_delete_many", { fileIds });
     }
+  },
+  downloadFile: async (fileId) => {
+    return invokeSafe<string>("file_download", { fileId });
+  },
+  openFile: async (fileId) => {
+    await invokeSafe("file_open", { fileId });
+  },
+  openFileFolder: async (fileId) => {
+    await invokeSafe("file_open_folder", { fileId });
   },
   searchChats: async (query) => {
     return invokeSafe<ChatItem[]>("tg_search_chats", { query });

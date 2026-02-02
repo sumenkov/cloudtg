@@ -80,6 +80,66 @@ fn emit_sync(app: &AppHandle, state: &str, message: &str, processed: i64, total:
   let _ = app.emit("tg_sync_status", payload);
 }
 
+async fn download_file_path(state: &AppState, file_id: &str) -> anyhow::Result<PathBuf> {
+  let db = state.db()?;
+  let tg = state.telegram()?;
+  let paths = state.paths()?;
+  let storage_chat_id = ensure_storage_chat_id(state).await?;
+  files::download_file(db.pool(), tg.as_ref(), &paths, storage_chat_id, file_id).await
+}
+
+fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
+  let path_str = path.to_string_lossy().to_string();
+  #[cfg(target_os = "windows")]
+  {
+    std::process::Command::new("cmd")
+      .args(["/C", "start", "", &path_str])
+      .spawn()?;
+    return Ok(());
+  }
+  #[cfg(target_os = "macos")]
+  {
+    std::process::Command::new("open")
+      .arg(&path_str)
+      .spawn()?;
+    return Ok(());
+  }
+  #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+  {
+    std::process::Command::new("xdg-open")
+      .arg(&path_str)
+      .spawn()?;
+    return Ok(());
+  }
+}
+
+fn open_folder_for_file(path: &Path) -> anyhow::Result<()> {
+  let path_str = path.to_string_lossy().to_string();
+  #[cfg(target_os = "windows")]
+  {
+    std::process::Command::new("explorer")
+      .arg(format!("/select,{path_str}"))
+      .spawn()?;
+    return Ok(());
+  }
+  #[cfg(target_os = "macos")]
+  {
+    std::process::Command::new("open")
+      .arg("-R")
+      .arg(&path_str)
+      .spawn()?;
+    return Ok(());
+  }
+  #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+  {
+    let folder = path.parent().unwrap_or_else(|| Path::new("."));
+    std::process::Command::new("xdg-open")
+      .arg(folder)
+      .spawn()?;
+    return Ok(());
+  }
+}
+
 async fn ensure_storage_chat_id(state: &AppState) -> anyhow::Result<i64> {
   let db = state.db()?;
   let pool = db.pool();
@@ -285,6 +345,27 @@ pub async fn file_delete_many(state: State<'_, AppState>, file_ids: Vec<String>)
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
   files::delete_files(db.pool(), tg.as_ref(), &file_ids).await.map_err(map_err)?;
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn file_download(state: State<'_, AppState>, file_id: String) -> Result<String, String> {
+  info!(event = "file_download", file_id = file_id.as_str(), "Скачивание файла");
+  let path = download_file_path(&state, &file_id).await.map_err(map_err)?;
+  Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn file_open(state: State<'_, AppState>, file_id: String) -> Result<(), String> {
+  let path = download_file_path(&state, &file_id).await.map_err(map_err)?;
+  open_file_in_os(&path).map_err(map_err)?;
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn file_open_folder(state: State<'_, AppState>, file_id: String) -> Result<(), String> {
+  let path = download_file_path(&state, &file_id).await.map_err(map_err)?;
+  open_folder_for_file(&path).map_err(map_err)?;
   Ok(())
 }
 

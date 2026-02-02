@@ -1,11 +1,12 @@
 use chrono::Utc;
 use sqlx::{SqlitePool, Row};
 use ulid::Ulid;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::fsmeta::{FileMeta, make_file_caption, parse_file_caption};
 use crate::telegram::{TelegramService, ChatId};
 use crate::app::dirs::dir_exists;
+use crate::paths::Paths;
 
 fn hash_short(path: &Path) -> anyhow::Result<String> {
   use sha2::{Digest, Sha256};
@@ -324,6 +325,58 @@ pub async fn delete_files(
   Ok(())
 }
 
+pub async fn download_file(
+  pool: &SqlitePool,
+  tg: &dyn TelegramService,
+  paths: &Paths,
+  storage_chat_id: ChatId,
+  file_id: &str
+) -> anyhow::Result<PathBuf> {
+  let row = sqlx::query("SELECT id, dir_id, name, size, tg_chat_id, tg_msg_id FROM files WHERE id = ?")
+    .bind(file_id)
+    .fetch_optional(pool)
+    .await?;
+  let Some(row) = row else {
+    return Err(anyhow::anyhow!("Файл не найден"));
+  };
+  let dir_id: String = row.get("dir_id");
+  let name: String = row.get("name");
+  let size: i64 = row.get("size");
+  let mut msg_chat_id: i64 = row.get("tg_chat_id");
+  let mut msg_id: i64 = row.get("tg_msg_id");
+
+  let dir_path = build_dir_path(pool, &dir_id).await?;
+  let base_dir = paths.cache_dir.join("downloads").join(dir_path);
+  std::fs::create_dir_all(&base_dir)?;
+  let target_path = resolve_target_path(&base_dir, &name, size)?;
+  if target_path.exists() {
+    return Ok(target_path);
+  }
+
+  match tg.download_message_file(msg_chat_id, msg_id, target_path.clone()).await {
+    Ok(path) => return Ok(path),
+    Err(_) => {}
+  }
+
+  if let Ok(Some((found_chat_id, found_msg_id))) =
+    find_file_message(tg, msg_chat_id, storage_chat_id, file_id).await
+  {
+    if found_chat_id != msg_chat_id || found_msg_id != msg_id {
+      msg_chat_id = found_chat_id;
+      msg_id = found_msg_id;
+      sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+        .bind(msg_chat_id)
+        .bind(msg_id)
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+    }
+  }
+
+  let path = tg.download_message_file(msg_chat_id, msg_id, target_path.clone()).await?;
+  Ok(path)
+}
+
 pub fn build_message_link(chat_id: i64, message_id: i64) -> anyhow::Result<String> {
   if chat_id >= 0 {
     return Err(anyhow::anyhow!("Ссылка доступна только для сообщений каналов"));
@@ -377,6 +430,90 @@ async fn fetch_dir_name(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Optio
     .fetch_optional(pool)
     .await?;
   Ok(row.map(|r| r.get::<String,_>("name")))
+}
+
+async fn build_dir_path(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<PathBuf> {
+  let mut names: Vec<String> = Vec::new();
+  let mut current = Some(dir_id.to_string());
+  let mut guard = 0;
+  while let Some(id) = current {
+    guard += 1;
+    if guard > 64 {
+      break;
+    }
+    let row = sqlx::query("SELECT name, parent_id FROM directories WHERE id = ?")
+      .bind(&id)
+      .fetch_optional(pool)
+      .await?;
+    let Some(row) = row else {
+      break;
+    };
+    let name: String = row.get("name");
+    if name.trim().is_empty() || name == "Неизвестная папка" {
+      // пропускаем
+    } else {
+      names.push(sanitize_component(&name));
+    }
+    let parent = row.try_get::<String,_>("parent_id").ok();
+    current = parent
+      .filter(|p| !p.trim().is_empty() && p != "ROOT");
+  }
+  names.reverse();
+  let mut path = PathBuf::new();
+  for n in names {
+    if !n.is_empty() {
+      path.push(n);
+    }
+  }
+  Ok(path)
+}
+
+fn sanitize_component(name: &str) -> String {
+  let mut out = String::new();
+  for ch in name.chars() {
+    if ch == '/' || ch == '\\' || ch == ':' {
+      out.push('_');
+    } else {
+      out.push(ch);
+    }
+  }
+  out.trim().to_string()
+}
+
+fn resolve_target_path(base_dir: &Path, name: &str, size: i64) -> anyhow::Result<PathBuf> {
+  let mut safe = sanitize_component(name);
+  if safe.is_empty() {
+    safe = "файл".to_string();
+  }
+  let mut candidate = base_dir.join(&safe);
+  if candidate.exists() {
+    if size > 0 {
+      if let Ok(meta) = std::fs::metadata(&candidate) {
+        if meta.len() as i64 == size {
+          return Ok(candidate);
+        }
+      }
+    }
+    let (stem, ext) = split_name(&safe);
+    for i in 1..=99 {
+      let next = format!("{stem} ({i}){ext}");
+      candidate = base_dir.join(&next);
+      if !candidate.exists() {
+        break;
+      }
+    }
+  }
+  Ok(candidate)
+}
+
+fn split_name(name: &str) -> (String, String) {
+  if let Some(pos) = name.rfind('.') {
+    if pos > 0 {
+      let (a, b) = name.split_at(pos);
+      return (a.to_string(), b.to_string());
+    }
+  }
+  (name.to_string(), String::new())
 }
 
 pub async fn find_file_message(

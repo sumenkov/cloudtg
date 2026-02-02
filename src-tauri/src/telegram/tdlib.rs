@@ -358,6 +358,17 @@ fn extract_active_username(value: &Value) -> Option<String> {
   None
 }
 
+fn local_path_from_file(value: &Value) -> Option<String> {
+  let local = value.get("local").and_then(|v| v.as_object())?;
+  let done = local.get("is_downloading_completed").and_then(|v| v.as_bool()).unwrap_or(false);
+  let path = local.get("path").and_then(|v| v.as_str()).unwrap_or("");
+  if done && !path.trim().is_empty() {
+    Some(path.to_string())
+  } else {
+    None
+  }
+}
+
 async fn chat_info_from_id(tg: &TdlibTelegram, chat_id: i64) -> Option<ChatInfo> {
   let chat = tg.request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10)).await.ok()?;
   let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("Без названия").to_string();
@@ -1382,9 +1393,60 @@ impl TelegramService for TdlibTelegram {
     Ok(())
   }
 
-  async fn download_message_file(&self, _chat_id: ChatId, _message_id: MessageId, _target: std::path::PathBuf)
+  async fn download_message_file(&self, chat_id: ChatId, message_id: MessageId, target: std::path::PathBuf)
     -> Result<std::path::PathBuf, TgError> {
-    Err(TgError::NotImplemented)
+    self.ensure_authorized().await?;
+    let msg = self
+      .request(
+        json!({
+          "@type":"getMessage",
+          "chat_id": chat_id,
+          "message_id": message_id
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+
+    let content = msg
+      .get("content")
+      .ok_or_else(|| TgError::Other("Не удалось получить содержимое сообщения".into()))?;
+    let (file_id, _) = extract_file_ref_from_content(content)
+      .ok_or_else(|| TgError::Other("Не удалось получить файл из сообщения".into()))?;
+
+    let downloaded = self
+      .request(
+        json!({
+          "@type":"downloadFile",
+          "file_id": file_id,
+          "priority": 1,
+          "offset": 0,
+          "limit": 0,
+          "synchronous": true
+        }),
+        Duration::from_secs(60)
+      )
+      .await?;
+
+    let mut local_path = local_path_from_file(&downloaded);
+    if local_path.is_none() {
+      if let Ok(file) = self.request(json!({"@type":"getFile","file_id":file_id}), Duration::from_secs(10)).await {
+        local_path = local_path_from_file(&file);
+      }
+    }
+
+    let Some(src) = local_path else {
+      return Err(TgError::Other("Не удалось получить локальный путь к файлу".into()));
+    };
+    let src_path = PathBuf::from(src);
+    if !src_path.exists() {
+      return Err(TgError::Other("Файл не найден в кеше TDLib".into()));
+    }
+
+    if let Some(parent) = target.parent() {
+      std::fs::create_dir_all(parent).map_err(TgError::Io)?;
+    }
+    std::fs::copy(&src_path, &target).map_err(TgError::Io)?;
+    Ok(target)
   }
 }
 
