@@ -27,3 +27,7 @@ Thumbs.db
 
 # Env
 .env
+
+# Codex
+.codex/config.toml
+AGENTS.md
