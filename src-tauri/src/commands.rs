@@ -335,7 +335,8 @@ pub async fn file_delete(state: State<'_, AppState>, file_id: String) -> Result<
   info!(event = "file_delete", file_id = file_id.as_str(), "Удаление файла");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
-  files::delete_file(db.pool(), tg.as_ref(), &file_id).await.map_err(map_err)?;
+  let paths = state.paths().map_err(map_err)?;
+  files::delete_file(db.pool(), tg.as_ref(), &paths, &file_id).await.map_err(map_err)?;
   Ok(())
 }
 
@@ -344,7 +345,8 @@ pub async fn file_delete_many(state: State<'_, AppState>, file_ids: Vec<String>)
   info!(event = "file_delete_many", count = file_ids.len(), "Удаление нескольких файлов");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
-  files::delete_files(db.pool(), tg.as_ref(), &file_ids).await.map_err(map_err)?;
+  let paths = state.paths().map_err(map_err)?;
+  files::delete_files(db.pool(), tg.as_ref(), &paths, &file_ids).await.map_err(map_err)?;
   Ok(())
 }
 

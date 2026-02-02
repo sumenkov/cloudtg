@@ -269,9 +269,10 @@ pub async fn move_file(
 pub async fn delete_file(
   pool: &SqlitePool,
   tg: &dyn TelegramService,
+  paths: &Paths,
   file_id: &str
 ) -> anyhow::Result<()> {
-  let row = sqlx::query("SELECT tg_msg_id, tg_chat_id FROM files WHERE id = ?")
+  let row = sqlx::query("SELECT tg_msg_id, tg_chat_id, dir_id, name, size FROM files WHERE id = ?")
     .bind(file_id)
     .fetch_optional(pool)
     .await?;
@@ -280,8 +281,14 @@ pub async fn delete_file(
   };
   let msg_id: i64 = row.get("tg_msg_id");
   let msg_chat_id: i64 = row.get("tg_chat_id");
+  let dir_id: String = row.get("dir_id");
+  let name: String = row.get("name");
+  let size: i64 = row.get("size");
   if let Err(e) = tg.delete_messages(msg_chat_id, vec![msg_id], true).await {
     tracing::warn!(event = "file_delete_message_failed", file_id = file_id, error = %e, "Не удалось удалить сообщение файла в TG");
+  }
+  if let Err(e) = remove_local_download(pool, paths, &dir_id, &name, size).await {
+    tracing::warn!(event = "file_delete_local_failed", file_id = file_id, error = %e, "Не удалось удалить локальный файл");
   }
   sqlx::query("DELETE FROM files WHERE id = ?")
     .bind(file_id)
@@ -293,20 +300,34 @@ pub async fn delete_file(
 pub async fn delete_files(
   pool: &SqlitePool,
   tg: &dyn TelegramService,
+  paths: &Paths,
   file_ids: &[String]
 ) -> anyhow::Result<()> {
   if file_ids.is_empty() {
     return Ok(());
   }
+  struct Row {
+    id: String,
+    dir_id: String,
+    name: String,
+    size: i64,
+    msg_id: i64,
+    msg_chat_id: i64
+  }
+  let mut rows: Vec<Row> = Vec::new();
   let mut grouped: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
   for id in file_ids {
-    if let Some(row) = sqlx::query("SELECT tg_msg_id, tg_chat_id FROM files WHERE id = ?")
+    if let Some(row) = sqlx::query("SELECT tg_msg_id, tg_chat_id, dir_id, name, size FROM files WHERE id = ?")
       .bind(id)
       .fetch_optional(pool)
       .await? {
       let msg_id = row.get::<i64,_>("tg_msg_id");
       let msg_chat_id = row.get::<i64,_>("tg_chat_id");
+      let dir_id = row.get::<String,_>("dir_id");
+      let name = row.get::<String,_>("name");
+      let size = row.get::<i64,_>("size");
       grouped.entry(msg_chat_id).or_default().push(msg_id);
+      rows.push(Row { id: id.clone(), dir_id, name, size, msg_id, msg_chat_id });
     }
   }
   if !grouped.is_empty() {
@@ -316,9 +337,12 @@ pub async fn delete_files(
       }
     }
   }
-  for id in file_ids {
+  for row in rows {
+    if let Err(e) = remove_local_download(pool, paths, &row.dir_id, &row.name, row.size).await {
+      tracing::warn!(event = "file_delete_local_failed", file_id = row.id.as_str(), error = %e, "Не удалось удалить локальный файл");
+    }
     sqlx::query("DELETE FROM files WHERE id = ?")
-      .bind(id)
+      .bind(&row.id)
       .execute(pool)
       .await?;
   }
@@ -516,6 +540,22 @@ fn split_name(name: &str) -> (String, String) {
   (name.to_string(), String::new())
 }
 
+fn is_name_variant(base_stem: &str, candidate_stem: &str) -> bool {
+  if candidate_stem == base_stem {
+    return true;
+  }
+  let Some(rest) = candidate_stem.strip_prefix(base_stem) else {
+    return false;
+  };
+  let Some(rest) = rest.strip_prefix(" (") else {
+    return false;
+  };
+  let Some(num) = rest.strip_suffix(")") else {
+    return false;
+  };
+  !num.is_empty() && num.chars().all(|c| c.is_ascii_digit())
+}
+
 pub async fn find_file_message(
   tg: &dyn TelegramService,
   msg_chat_id: ChatId,
@@ -573,4 +613,75 @@ pub async fn find_file_message(
   }
 
   Ok(None)
+}
+
+async fn remove_local_download(
+  pool: &SqlitePool,
+  paths: &Paths,
+  dir_id: &str,
+  name: &str,
+  size: i64
+) -> anyhow::Result<()> {
+  let dir_path = build_dir_path(pool, dir_id).await?;
+  let base_dir = paths.cache_dir.join("downloads").join(dir_path);
+  if !base_dir.exists() {
+    return Ok(());
+  }
+
+  let mut safe = sanitize_component(name);
+  if safe.is_empty() {
+    safe = "файл".to_string();
+  }
+  let (stem, ext) = split_name(&safe);
+  let mut removed = false;
+
+  let entries = match std::fs::read_dir(&base_dir) {
+    Ok(v) => v,
+    Err(_) => return Ok(())
+  };
+  for entry in entries.flatten() {
+    let path = entry.path();
+    if !path.is_file() {
+      continue;
+    }
+    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+      Some(v) => v,
+      None => continue
+    };
+    let (cand_stem, cand_ext) = split_name(file_name);
+    if cand_ext != ext || !is_name_variant(&stem, &cand_stem) {
+      continue;
+    }
+    if size > 0 {
+      if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() as i64 != size {
+          continue;
+        }
+      }
+    }
+    let _ = std::fs::remove_file(&path);
+    removed = true;
+  }
+
+  let should_cleanup = removed || std::fs::read_dir(&base_dir).map(|mut it| it.next().is_none()).unwrap_or(false);
+  if should_cleanup {
+    cleanup_empty_dirs(paths.cache_dir.join("downloads"), Some(&base_dir));
+  }
+  Ok(())
+}
+
+fn cleanup_empty_dirs(root: PathBuf, start: Option<&Path>) {
+  let mut current = start.map(|p| p.to_path_buf());
+  while let Some(dir) = current {
+    if !dir.starts_with(&root) || dir == root {
+      break;
+    }
+    let is_empty = std::fs::read_dir(&dir).map(|mut it| it.next().is_none()).unwrap_or(false);
+    if !is_empty {
+      break;
+    }
+    let parent = dir.parent().map(|p| p.to_path_buf());
+    let _ = std::fs::remove_dir(&dir);
+    current = parent;
+  }
 }
