@@ -310,9 +310,7 @@ pub async fn delete_files(
     id: String,
     dir_id: String,
     name: String,
-    size: i64,
-    msg_id: i64,
-    msg_chat_id: i64
+    size: i64
   }
   let mut rows: Vec<Row> = Vec::new();
   let mut grouped: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
@@ -327,7 +325,7 @@ pub async fn delete_files(
       let name = row.get::<String,_>("name");
       let size = row.get::<i64,_>("size");
       grouped.entry(msg_chat_id).or_default().push(msg_id);
-      rows.push(Row { id: id.clone(), dir_id, name, size, msg_id, msg_chat_id });
+      rows.push(Row { id: id.clone(), dir_id, name, size });
     }
   }
   if !grouped.is_empty() {

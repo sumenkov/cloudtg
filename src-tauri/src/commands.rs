@@ -114,9 +114,9 @@ fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
 }
 
 fn open_folder_for_file(path: &Path) -> anyhow::Result<()> {
-  let path_str = path.to_string_lossy().to_string();
   #[cfg(target_os = "windows")]
   {
+    let path_str = path.to_string_lossy().to_string();
     std::process::Command::new("explorer")
       .arg(format!("/select,{path_str}"))
       .spawn()?;
@@ -124,6 +124,7 @@ fn open_folder_for_file(path: &Path) -> anyhow::Result<()> {
   }
   #[cfg(target_os = "macos")]
   {
+    let path_str = path.to_string_lossy().to_string();
     std::process::Command::new("open")
       .arg("-R")
       .arg(&path_str)
