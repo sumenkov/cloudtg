@@ -18,7 +18,8 @@ pub struct HistoryMessage {
   pub date: i64,
   pub text: Option<String>,
   pub caption: Option<String>,
-  pub file_size: Option<i64>
+  pub file_size: Option<i64>,
+  pub file_name: Option<String>
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,8 @@ pub trait TelegramService: Send + Sync {
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_delete_channel(&self, chat_id: ChatId) -> Result<(), TgError>;
+  async fn chat_history(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
+    -> Result<SearchMessagesResult, TgError>;
   async fn search_chat_messages(&self, chat_id: ChatId, query: String, from_message_id: MessageId, limit: i32)
     -> Result<SearchMessagesResult, TgError>;
   async fn search_storage_messages(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)

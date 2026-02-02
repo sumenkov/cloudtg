@@ -184,12 +184,12 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       setRenameValue("");
       setMoveParentId("ROOT");
       setSelectedFiles(new Set());
-      setShareFile(null);
-      setShareResults([]);
-      setShareQuery("");
-      setShareStatus(null);
-      return;
-    }
+    setShareFile(null);
+    setShareResults([]);
+    setShareQuery("");
+    setShareStatus(null);
+    return;
+  }
     setRenameValue(selectedNode.name);
     setMoveParentId(selectedNode.parent_id ?? "ROOT");
     setSelectedFiles(new Set());

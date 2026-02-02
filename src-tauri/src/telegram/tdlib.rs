@@ -263,6 +263,44 @@ fn extract_file_size(content: &Value) -> Option<i64> {
   None
 }
 
+fn extract_file_name(content: &Value) -> Option<String> {
+  if let Some(name) = content.get("file_name").and_then(|v| v.as_str()) {
+    if !name.trim().is_empty() {
+      return Some(name.to_string());
+    }
+  }
+
+  let candidates = [
+    "document",
+    "video",
+    "audio",
+    "voice_note",
+    "video_note",
+    "animation",
+    "sticker",
+    "photo"
+  ];
+
+  for key in candidates {
+    if let Some(obj) = content.get(key).and_then(|v| v.as_object()) {
+      if let Some(name) = obj.get("file_name").and_then(|v| v.as_str()) {
+        if !name.trim().is_empty() {
+          return Some(name.to_string());
+        }
+      }
+      if let Some(doc) = obj.get("document").and_then(|v| v.as_object()) {
+        if let Some(name) = doc.get("file_name").and_then(|v| v.as_str()) {
+          if !name.trim().is_empty() {
+            return Some(name.to_string());
+          }
+        }
+      }
+    }
+  }
+
+  None
+}
+
 fn file_ref_from_obj(obj: &serde_json::Map<String, Value>) -> Option<(i64, Option<String>)> {
   let id = obj.get("id").and_then(|v| v.as_i64())?;
   let remote_id = obj
@@ -938,6 +976,45 @@ impl TelegramService for TdlibTelegram {
     Ok(())
   }
 
+  async fn chat_history(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
+    -> Result<SearchMessagesResult, TgError> {
+    self.ensure_authorized().await?;
+    let offset = if from_message_id == 0 { 0 } else { -1 };
+    let res = self
+      .request(
+        json!({
+          "@type":"getChatHistory",
+          "chat_id": chat_id,
+          "from_message_id": from_message_id,
+          "offset": offset,
+          "limit": limit,
+          "only_local": false
+        }),
+        Duration::from_secs(30)
+      )
+      .await?;
+
+    let mut messages = Vec::new();
+    if let Some(list) = res.get("messages").and_then(|v| v.as_array()) {
+      for m in list {
+        let id = m.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        if id == 0 {
+          continue;
+        }
+        let date = m.get("date").and_then(|v| v.as_i64()).unwrap_or(0);
+        let (text, caption, file_size, file_name) = if let Some(content) = m.get("content") {
+          (extract_text(content), extract_caption(content), extract_file_size(content), extract_file_name(content))
+        } else {
+          (None, None, None, None)
+        };
+        messages.push(HistoryMessage { id, date, text, caption, file_size, file_name });
+      }
+    }
+    let next_from_message_id = messages.last().map(|m| m.id).unwrap_or(0);
+
+    Ok(SearchMessagesResult { total_count: None, next_from_message_id, messages })
+  }
+
   async fn search_chat_messages(&self, chat_id: ChatId, query: String, from_message_id: MessageId, limit: i32)
     -> Result<SearchMessagesResult, TgError> {
     self.ensure_authorized().await?;
@@ -975,12 +1052,12 @@ impl TelegramService for TdlibTelegram {
           continue;
         }
         let date = m.get("date").and_then(|v| v.as_i64()).unwrap_or(0);
-        let (text, caption, file_size) = if let Some(content) = m.get("content") {
-          (extract_text(content), extract_caption(content), extract_file_size(content))
+        let (text, caption, file_size, file_name) = if let Some(content) = m.get("content") {
+          (extract_text(content), extract_caption(content), extract_file_size(content), extract_file_name(content))
         } else {
-          (None, None, None)
+          (None, None, None, None)
         };
-        messages.push(HistoryMessage { id, date, text, caption, file_size });
+        messages.push(HistoryMessage { id, date, text, caption, file_size, file_name });
       }
     }
 

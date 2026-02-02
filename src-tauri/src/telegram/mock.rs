@@ -61,6 +61,11 @@ impl TelegramService for MockTelegram {
     Ok(())
   }
 
+  async fn chat_history(&self, _chat_id: ChatId, _from_message_id: MessageId, _limit: i32)
+    -> Result<SearchMessagesResult, TgError> {
+    Ok(SearchMessagesResult { total_count: None, next_from_message_id: 0, messages: Vec::new() })
+  }
+
   async fn search_chat_messages(&self, _chat_id: ChatId, _query: String, _from_message_id: MessageId, _limit: i32)
     -> Result<SearchMessagesResult, TgError> {
     Ok(SearchMessagesResult { total_count: Some(0), next_from_message_id: 0, messages: Vec::new() })

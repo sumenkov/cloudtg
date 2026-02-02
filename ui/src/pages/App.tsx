@@ -248,6 +248,44 @@ export default function App() {
         </div>
       ) : null}
 
+      {auth === "ready" && !showSettings ? (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 12,
+            borderRadius: 10,
+            border: "1px solid #ddd",
+            background: "#f7f7f7",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap"
+          }}
+        >
+          <div>
+            <b>Импорт из канала</b>
+            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.7 }}>
+              Ищем новые файлы, добавленные вручную в канал хранения.
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              try {
+                await invokeSafe("tg_sync_storage");
+                await refreshTree();
+              } catch (e: any) {
+                setError(String(e));
+              }
+            }}
+            disabled={tgSync.state === "start" || tgSync.state === "progress"}
+            style={{ padding: "10px 14px", borderRadius: 10 }}
+          >
+            Запустить импорт
+          </button>
+        </div>
+      ) : null}
+
       {error ? (
         <div style={{ background: "#fee", border: "1px solid #f99", padding: 12, borderRadius: 8 }}>
           <b>Ошибка:</b> {error}
