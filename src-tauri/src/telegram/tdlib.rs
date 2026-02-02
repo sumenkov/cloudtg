@@ -25,7 +25,7 @@ use image::imageops::FilterType;
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
 use crate::secrets::TgCredentials;
-use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage, HistoryMessage, SearchMessagesResult};
+use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage, HistoryMessage, SearchMessagesResult, ChatInfo};
 
 #[derive(Clone)]
 struct TdlibConfig {
@@ -334,6 +334,61 @@ fn extract_file_ref_from_content(content: &Value) -> Option<(i64, Option<String>
   }
 
   find_file_ref(content)
+}
+
+fn extract_active_username(value: &Value) -> Option<String> {
+  if let Some(name) = value.get("username").and_then(|v| v.as_str()) {
+    if !name.trim().is_empty() {
+      return Some(name.to_string());
+    }
+  }
+  if let Some(list) = value
+    .get("usernames")
+    .and_then(|v| v.get("active_usernames"))
+    .and_then(|v| v.as_array())
+  {
+    for item in list {
+      if let Some(name) = item.as_str() {
+        if !name.trim().is_empty() {
+          return Some(name.to_string());
+        }
+      }
+    }
+  }
+  None
+}
+
+async fn chat_info_from_id(tg: &TdlibTelegram, chat_id: i64) -> Option<ChatInfo> {
+  let chat = tg.request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10)).await.ok()?;
+  let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("Без названия").to_string();
+  let chat_type = chat.get("type").and_then(|v| v.as_object());
+  let type_name = chat_type
+    .and_then(|t| t.get("@type"))
+    .and_then(|v| v.as_str())
+    .unwrap_or("");
+  let mut kind = "чат".to_string();
+  let mut username = extract_active_username(&chat);
+
+  if type_name == "chatTypeSupergroup" {
+    let is_channel = chat_type
+      .and_then(|t| t.get("is_channel"))
+      .and_then(|v| v.as_bool())
+      .unwrap_or(false);
+    kind = if is_channel { "канал" } else { "группа" }.to_string();
+    if username.is_none() {
+      if let Some(supergroup_id) = chat_type.and_then(|t| t.get("supergroup_id")).and_then(|v| v.as_i64()) {
+        if let Ok(sg) = tg.request(json!({"@type":"getSupergroup","supergroup_id":supergroup_id}), Duration::from_secs(10)).await {
+          username = extract_active_username(&sg);
+        }
+      }
+    }
+  } else if type_name == "chatTypeBasicGroup" {
+    kind = "группа".to_string();
+  } else if type_name == "chatTypePrivate" {
+    kind = "личный чат".to_string();
+  }
+
+  Some(ChatInfo { id: chat_id, title, kind, username })
 }
 
 impl TdlibTelegram {
@@ -926,6 +981,99 @@ impl TelegramService for TdlibTelegram {
     self.search_chat_messages(chat_id, "#ocltg".into(), from_message_id, limit).await
   }
 
+  async fn search_chats(&self, query: String, limit: i32) -> Result<Vec<ChatInfo>, TgError> {
+    self.ensure_authorized().await?;
+    let q = query.trim().to_string();
+    let mut out: Vec<ChatInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+    let mut ids: Vec<i64> = Vec::new();
+    if !q.is_empty() {
+      if let Ok(res) = self.request(json!({"@type":"searchChats","query":q,"limit":limit}), Duration::from_secs(10)).await {
+        if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
+          for id in list {
+            if let Some(v) = id.as_i64() {
+              ids.push(v);
+            }
+          }
+        }
+      }
+      if ids.is_empty() {
+        if let Ok(res) = self.request(json!({"@type":"searchChatsOnServer","query":q,"limit":limit}), Duration::from_secs(10)).await {
+          if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
+            for id in list {
+              if let Some(v) = id.as_i64() {
+                ids.push(v);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if q.starts_with('@') {
+      let username = q.trim_start_matches('@');
+      if let Ok(chat) = self.request(json!({"@type":"searchPublicChat","username":username}), Duration::from_secs(10)).await {
+        if let Some(chat_id) = chat.get("id").and_then(|v| v.as_i64()) {
+          ids.push(chat_id);
+        }
+      }
+    }
+
+    for chat_id in ids {
+      if seen.contains(&chat_id) {
+        continue;
+      }
+      if let Some(info) = chat_info_from_id(self, chat_id).await {
+        seen.insert(chat_id);
+        out.push(info);
+      }
+    }
+    Ok(out)
+  }
+
+  async fn recent_chats(&self, limit: i32) -> Result<Vec<ChatInfo>, TgError> {
+    self.ensure_authorized().await?;
+    let mut out: Vec<ChatInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+    if let Ok(me) = self.request(json!({"@type":"getMe"}), Duration::from_secs(10)).await {
+      if let Some(user_id) = me.get("id").and_then(|v| v.as_i64()) {
+        if let Ok(chat) = self.request(json!({"@type":"createPrivateChat","user_id":user_id,"force":true}), Duration::from_secs(10)).await {
+          if let Some(chat_id) = chat.get("id").and_then(|v| v.as_i64()) {
+            seen.insert(chat_id);
+            out.push(ChatInfo {
+              id: chat_id,
+              title: "Избранное".to_string(),
+              kind: "личный чат".to_string(),
+              username: None
+            });
+          }
+        }
+      }
+    }
+
+    let res = self
+      .request(json!({"@type":"getChats","chat_list":{"@type":"chatListMain"},"limit":limit}), Duration::from_secs(10))
+      .await?;
+    if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
+      for id in list {
+        let chat_id = match id.as_i64() {
+          Some(v) => v,
+          None => continue
+        };
+        if seen.contains(&chat_id) {
+          continue;
+        }
+        if let Some(info) = chat_info_from_id(self, chat_id).await {
+          seen.insert(chat_id);
+          out.push(info);
+        }
+      }
+    }
+    Ok(out)
+  }
+
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
     self.ensure_authorized().await?;
     tracing::info!(event = "tdlib_send_text_message", chat_id = chat_id, "Отправка тестового сообщения");
@@ -1135,6 +1283,40 @@ impl TelegramService for TdlibTelegram {
       .unwrap_or(chat_id);
 
     Ok(UploadedMessage { chat_id, message_id: msg_id, caption_or_text: caption })
+  }
+
+  async fn forward_message(&self, from_chat_id: ChatId, to_chat_id: ChatId, message_id: MessageId) -> Result<MessageId, TgError> {
+    self.ensure_authorized().await?;
+    let res = self
+      .request(
+        json!({
+          "@type":"forwardMessages",
+          "chat_id": to_chat_id,
+          "from_chat_id": from_chat_id,
+          "message_ids": [message_id],
+          "send_copy": false,
+          "remove_caption": false,
+          "options": {
+            "@type": "messageSendOptions",
+            "disable_notification": false,
+            "from_background": false,
+            "protect_content": false
+          }
+        }),
+        Duration::from_secs(30)
+      )
+      .await?;
+    if let Some(list) = res.get("messages").and_then(|v| v.as_array()) {
+      if let Some(first) = list.first() {
+        if first.is_null() {
+          return Err(TgError::Other("TDLib не вернул сообщение при пересылке".into()));
+        }
+        if let Some(id) = first.get("id").and_then(|v| v.as_i64()) {
+          return Ok(id);
+        }
+      }
+    }
+    Err(TgError::Other("TDLib не вернул сообщение при пересылке".into()))
   }
 
   async fn copy_messages(

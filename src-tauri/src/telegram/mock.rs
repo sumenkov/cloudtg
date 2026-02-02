@@ -3,7 +3,7 @@ use std::{collections::VecDeque, path::PathBuf};
 use parking_lot::Mutex;
 
 use crate::paths::Paths;
-use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage, SearchMessagesResult, HistoryMessage};
+use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage, SearchMessagesResult, HistoryMessage, ChatInfo};
 
 pub struct MockTelegram {
   paths: Paths,
@@ -71,6 +71,14 @@ impl TelegramService for MockTelegram {
     Ok(SearchMessagesResult { total_count: Some(0), next_from_message_id: 0, messages: Vec::new() })
   }
 
+  async fn search_chats(&self, _query: String, _limit: i32) -> Result<Vec<ChatInfo>, TgError> {
+    Ok(Vec::new())
+  }
+
+  async fn recent_chats(&self, _limit: i32) -> Result<Vec<ChatInfo>, TgError> {
+    Ok(Vec::new())
+  }
+
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
     let msg = UploadedMessage { chat_id, message_id: self.alloc_msg_id(), caption_or_text: text };
     self.messages.lock().push_back(msg.clone());
@@ -107,6 +115,10 @@ impl TelegramService for MockTelegram {
     let msg = UploadedMessage { chat_id, message_id: self.alloc_msg_id(), caption_or_text: caption };
     self.messages.lock().push_back(msg.clone());
     Ok(msg)
+  }
+
+  async fn forward_message(&self, _from_chat_id: ChatId, _to_chat_id: ChatId, _message_id: MessageId) -> Result<MessageId, TgError> {
+    Ok(self.alloc_msg_id())
   }
 
   async fn copy_messages(

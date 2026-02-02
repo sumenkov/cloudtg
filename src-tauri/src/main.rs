@@ -40,6 +40,7 @@ fn main() {
 
   tauri::Builder::default()
     .manage(AppState::new())
+    .plugin(tauri_plugin_clipboard_manager::init())
     .invoke_handler(tauri::generate_handler![
       commands::auth_status,
       commands::auth_start,
@@ -57,6 +58,10 @@ fn main() {
       commands::file_move,
       commands::file_delete,
       commands::file_delete_many,
+      commands::file_share_link,
+      commands::file_share_to_chat,
+      commands::tg_search_chats,
+      commands::tg_recent_chats,
       commands::tg_test_message,
       commands::tg_create_channel,
       commands::tg_sync_storage,

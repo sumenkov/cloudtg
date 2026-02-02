@@ -28,6 +28,14 @@ pub struct SearchMessagesResult {
   pub messages: Vec<HistoryMessage>
 }
 
+#[derive(Debug, Clone)]
+pub struct ChatInfo {
+  pub id: ChatId,
+  pub title: String,
+  pub kind: String,
+  pub username: Option<String>
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum TgError {
   #[error("не реализовано")]
@@ -55,6 +63,8 @@ pub trait TelegramService: Send + Sync {
     -> Result<SearchMessagesResult, TgError>;
   async fn search_storage_messages(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
     -> Result<SearchMessagesResult, TgError>;
+  async fn search_chats(&self, query: String, limit: i32) -> Result<Vec<ChatInfo>, TgError>;
+  async fn recent_chats(&self, limit: i32) -> Result<Vec<ChatInfo>, TgError>;
 
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
   async fn send_dir_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError>;
@@ -62,6 +72,7 @@ pub trait TelegramService: Send + Sync {
   async fn edit_message_caption(&self, chat_id: ChatId, message_id: MessageId, caption: String) -> Result<(), TgError>;
   async fn send_file(&self, chat_id: ChatId, path: std::path::PathBuf, caption: String) -> Result<UploadedMessage, TgError>;
   async fn send_file_from_message(&self, chat_id: ChatId, message_id: MessageId, caption: String) -> Result<UploadedMessage, TgError>;
+  async fn forward_message(&self, from_chat_id: ChatId, to_chat_id: ChatId, message_id: MessageId) -> Result<MessageId, TgError>;
   async fn copy_messages(&self, from_chat_id: ChatId, to_chat_id: ChatId, message_ids: Vec<MessageId>)
     -> Result<Vec<Option<MessageId>>, TgError>;
   async fn delete_messages(&self, chat_id: ChatId, message_ids: Vec<MessageId>, revoke: bool) -> Result<(), TgError>;

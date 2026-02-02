@@ -324,6 +324,18 @@ pub async fn delete_files(
   Ok(())
 }
 
+pub fn build_message_link(chat_id: i64, message_id: i64) -> anyhow::Result<String> {
+  if chat_id >= 0 {
+    return Err(anyhow::anyhow!("Ссылка доступна только для сообщений каналов"));
+  }
+  let abs = chat_id.abs();
+  let internal = abs
+    .checked_sub(1_000_000_000_000)
+    .filter(|v| *v > 0)
+    .ok_or_else(|| anyhow::anyhow!("Не удалось определить ссылку для этого чата"))?;
+  Ok(format!("https://t.me/c/{internal}/{message_id}"))
+}
+
 fn make_file_caption_with_tag(meta: &FileMeta, dir_name: Option<&str>) -> String {
   let base = make_file_caption(meta);
   if let Some(tag) = dir_name.and_then(folder_hashtag) {
@@ -367,7 +379,7 @@ async fn fetch_dir_name(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Optio
   Ok(row.map(|r| r.get::<String,_>("name")))
 }
 
-async fn find_file_message(
+pub async fn find_file_message(
   tg: &dyn TelegramService,
   msg_chat_id: ChatId,
   storage_chat_id: ChatId,

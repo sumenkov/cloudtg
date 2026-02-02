@@ -44,6 +44,19 @@ pub struct TgSettingsSaveResult {
   pub message: String
 }
 
+#[derive(serde::Serialize)]
+pub struct ChatView {
+  pub id: i64,
+  pub title: String,
+  pub kind: String,
+  pub username: Option<String>
+}
+
+#[derive(serde::Serialize)]
+pub struct ShareResult {
+  pub message: String
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TgSettingsInput {
@@ -273,6 +286,100 @@ pub async fn file_delete_many(state: State<'_, AppState>, file_ids: Vec<String>)
   let tg = state.telegram().map_err(map_err)?;
   files::delete_files(db.pool(), tg.as_ref(), &file_ids).await.map_err(map_err)?;
   Ok(())
+}
+
+#[tauri::command]
+pub async fn file_share_link(state: State<'_, AppState>, file_id: String) -> Result<String, String> {
+  let db = state.db().map_err(map_err)?;
+  let row = sqlx::query("SELECT tg_chat_id, tg_msg_id FROM files WHERE id = ?")
+    .bind(&file_id)
+    .fetch_optional(db.pool())
+    .await
+    .map_err(|e| map_err(e.into()))?;
+  let Some(row) = row else {
+    return Err("Файл не найден".into());
+  };
+  let chat_id: i64 = row.get("tg_chat_id");
+  let msg_id: i64 = row.get("tg_msg_id");
+  files::build_message_link(chat_id, msg_id).map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn tg_search_chats(state: State<'_, AppState>, query: String) -> Result<Vec<ChatView>, String> {
+  let tg = state.telegram().map_err(map_err)?;
+  let items = tg.search_chats(query, 20).await.map_err(|e| e.to_string())?;
+  Ok(items
+    .into_iter()
+    .map(|c| ChatView {
+      id: c.id,
+      title: c.title,
+      kind: c.kind,
+      username: c.username
+    })
+    .collect())
+}
+
+#[tauri::command]
+pub async fn tg_recent_chats(state: State<'_, AppState>) -> Result<Vec<ChatView>, String> {
+  let tg = state.telegram().map_err(map_err)?;
+  let items = tg.recent_chats(12).await.map_err(|e| e.to_string())?;
+  Ok(items
+    .into_iter()
+    .map(|c| ChatView {
+      id: c.id,
+      title: c.title,
+      kind: c.kind,
+      username: c.username
+    })
+    .collect())
+}
+
+#[tauri::command]
+pub async fn file_share_to_chat(state: State<'_, AppState>, file_id: String, chat_id: i64) -> Result<ShareResult, String> {
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  let row = sqlx::query("SELECT tg_chat_id, tg_msg_id FROM files WHERE id = ?")
+    .bind(&file_id)
+    .fetch_optional(db.pool())
+    .await
+    .map_err(|e| map_err(e.into()))?;
+  let Some(row) = row else {
+    return Err("Файл не найден".into());
+  };
+  let mut from_chat_id: i64 = row.get("tg_chat_id");
+  let mut msg_id: i64 = row.get("tg_msg_id");
+
+  match tg.forward_message(from_chat_id, chat_id, msg_id).await {
+    Ok(_) => {
+      return Ok(ShareResult { message: "Сообщение переслано.".into() });
+    }
+    Err(_) => {}
+  }
+
+  {
+    let storage_chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+    if let Ok(Some((found_chat_id, found_msg_id))) =
+      files::find_file_message(tg.as_ref(), from_chat_id, storage_chat_id, &file_id).await
+    {
+      if found_chat_id != from_chat_id || found_msg_id != msg_id {
+        from_chat_id = found_chat_id;
+        msg_id = found_msg_id;
+        sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+          .bind(from_chat_id)
+          .bind(msg_id)
+          .bind(&file_id)
+          .execute(db.pool())
+          .await
+          .map_err(|e| map_err(e.into()))?;
+      }
+    }
+  }
+
+  tg.forward_message(from_chat_id, chat_id, msg_id)
+    .await
+    .map_err(|e| e.to_string())?;
+
+  Ok(ShareResult { message: "Сообщение переслано.".into() })
 }
 
 #[tauri::command]

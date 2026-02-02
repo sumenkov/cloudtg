@@ -1,6 +1,6 @@
 [package]
 name = "cloudtg"
-version = "0.1.1"
+version = "0.1.2"
 description = "CloudTG backend (Tauri + Rust)"
 authors = ["you"]
 edition = "2021"
@@ -23,6 +23,7 @@ tdlib = []
 
 [dependencies]
 tauri = { version = "2", features = ["image-png"] }
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

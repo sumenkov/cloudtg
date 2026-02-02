@@ -19,6 +19,13 @@ export type FileItem = {
   created_at: number;
 };
 
+export type ChatItem = {
+  id: number;
+  title: string;
+  kind: string;
+  username: string | null;
+};
+
 type State = {
   auth: "unknown" | "wait_config" | "wait_phone" | "wait_code" | "wait_password" | "ready" | "closed";
   tree: DirNode | null;
@@ -68,6 +75,9 @@ type State = {
   uploadFile: (dirId: string, path: string) => Promise<void>;
   moveFiles: (fileIds: string[], dirId: string) => Promise<void>;
   deleteFiles: (fileIds: string[]) => Promise<void>;
+  searchChats: (query: string) => Promise<ChatItem[]>;
+  shareFileToChat: (fileId: string, chatId: number) => Promise<string>;
+  getRecentChats: () => Promise<ChatItem[]>;
 };
 
 export const useAppStore = create<State>((set, get) => ({
@@ -185,6 +195,16 @@ export const useAppStore = create<State>((set, get) => ({
     } else {
       await invokeSafe("file_delete_many", { fileIds });
     }
+  },
+  searchChats: async (query) => {
+    return invokeSafe<ChatItem[]>("tg_search_chats", { query });
+  },
+  shareFileToChat: async (fileId, chatId) => {
+    const res = await invokeSafe<{ message: string }>("file_share_to_chat", { fileId, chatId });
+    return res.message;
+  },
+  getRecentChats: async () => {
+    return invokeSafe<ChatItem[]>("tg_recent_chats");
   }
 }));
 

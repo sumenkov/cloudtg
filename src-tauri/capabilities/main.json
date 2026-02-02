@@ -5,7 +5,8 @@
   "permissions": [
     "core:default",
     "core:event:default",
-    "core:event:allow-listen"
+    "core:event:allow-listen",
+    "clipboard-manager:allow-write-text"
   ],
   "remote": {
     "urls": [

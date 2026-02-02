@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useAppStore, DirNode } from "../store/app";
+import { useAppStore, DirNode, ChatItem, FileItem } from "../store/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 function containsNode(root: DirNode, id: string): boolean {
@@ -137,6 +137,9 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     uploadFile,
     moveFiles,
     deleteFiles,
+    searchChats,
+    shareFileToChat,
+    getRecentChats,
     setError
   } = useAppStore();
   const [parentId, setParentId] = useState<string | null>(tree?.id ?? "ROOT");
@@ -147,6 +150,11 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(() => new Set());
   const [fileMoveTarget, setFileMoveTarget] = useState<string>("");
   const [dropActive, setDropActive] = useState(false);
+  const [shareFile, setShareFile] = useState<FileItem | null>(null);
+  const [shareQuery, setShareQuery] = useState("");
+  const [shareResults, setShareResults] = useState<ChatItem[]>([]);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!tree) return;
@@ -173,12 +181,36 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       setRenameValue("");
       setMoveParentId("ROOT");
       setSelectedFiles(new Set());
+      setShareFile(null);
+      setShareResults([]);
+      setShareQuery("");
+      setShareStatus(null);
       return;
     }
     setRenameValue(selectedNode.name);
     setMoveParentId(selectedNode.parent_id ?? "ROOT");
     setSelectedFiles(new Set());
+    setShareFile(null);
+    setShareResults([]);
+    setShareQuery("");
+    setShareStatus(null);
   }, [selectedNode]);
+
+  useEffect(() => {
+    if (!shareFile) return;
+    setShareStatus(null);
+    (async () => {
+      try {
+        setShareBusy(true);
+        const recent = await getRecentChats();
+        setShareResults(recent);
+      } catch (e: any) {
+        setError(String(e));
+      } finally {
+        setShareBusy(false);
+      }
+    })();
+  }, [shareFile, getRecentChats, setError]);
 
   const moveOptions = useMemo(() => {
     if (!tree) return [];
@@ -351,7 +383,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
         </div>
 
         <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
-          <b>Перемещение</b>
+          <b>Перемещение директории</b>
           <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
             <select
               value={moveParentId}
@@ -518,6 +550,130 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                 </div>
               </div>
 
+              {shareStatus ? (
+                <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: "#f6f6f6" }}>
+                  {shareStatus}
+                </div>
+              ) : null}
+
+              {shareFile ? (
+                <div style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
+                  <b>Поделиться файлом</b>
+                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+                    Файл: {shareFile.name}
+                  </div>
+                  <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 160px", gap: 8 }}>
+                    <input
+                      value={shareQuery}
+                      onChange={(e) => setShareQuery(e.target.value)}
+                      placeholder="Название чата или @username"
+                      style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                    />
+                    <button
+                      onClick={async () => {
+                        const q = shareQuery.trim();
+                        if (!q) return;
+                        try {
+                          setShareBusy(true);
+                          const res = await searchChats(q);
+                          setShareResults(res);
+                        } catch (e: any) {
+                          setError(String(e));
+                        } finally {
+                          setShareBusy(false);
+                        }
+                      }}
+                      disabled={shareBusy || !shareQuery.trim()}
+                      style={{ padding: 10, borderRadius: 10 }}
+                    >
+                      Найти
+                    </button>
+                  </div>
+                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      onClick={() => {
+                        setShareFile(null);
+                        setShareQuery("");
+                        setShareResults([]);
+                      }}
+                      style={{ padding: "6px 10px", borderRadius: 8, opacity: 0.8 }}
+                    >
+                      Закрыть
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          setShareBusy(true);
+                          const recent = await getRecentChats();
+                          setShareResults(recent);
+                        } catch (e: any) {
+                          setError(String(e));
+                        } finally {
+                          setShareBusy(false);
+                        }
+                      }}
+                      disabled={shareBusy}
+                      style={{ padding: "6px 10px", borderRadius: 8 }}
+                    >
+                      Недавние чаты
+                    </button>
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    {shareResults.length === 0 ? (
+                      <div style={{ fontSize: 12, opacity: 0.6 }}>
+                        Введи запрос и нажми «Найти» или выбери из недавних.
+                      </div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {shareResults.map((chat) => (
+                          <div
+                            key={chat.id}
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "1fr 140px",
+                              gap: 10,
+                              alignItems: "center",
+                              padding: "8px 10px",
+                              border: "1px solid #eee",
+                              borderRadius: 8
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontWeight: 500 }}>{chat.title}</div>
+                              <div style={{ fontSize: 12, opacity: 0.6 }}>
+                                {chat.kind}
+                                {chat.username ? ` • @${chat.username}` : ""}
+                              </div>
+                            </div>
+                            <button
+                              onClick={async () => {
+                                if (!shareFile) return;
+                                try {
+                                  setShareBusy(true);
+                                  const msg = await shareFileToChat(shareFile.id, chat.id);
+                                  setShareStatus(msg);
+                                  setShareFile(null);
+                                  setShareResults([]);
+                                  setShareQuery("");
+                                } catch (e: any) {
+                                  setError(String(e));
+                                } finally {
+                                  setShareBusy(false);
+                                }
+                              }}
+                              disabled={shareBusy}
+                              style={{ padding: "6px 10px", borderRadius: 8 }}
+                            >
+                              Отправить
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
               <div style={{ marginTop: 12, border: "1px solid #eee", borderRadius: 10, overflow: "hidden" }}>
                 {files.length === 0 ? (
                   <div style={{ padding: 12, fontSize: 12, opacity: 0.6 }}>Файлов пока нет.</div>
@@ -530,7 +686,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                           key={f.id}
                           style={{
                             display: "grid",
-                            gridTemplateColumns: "24px 1fr 120px 120px 120px",
+                            gridTemplateColumns: "24px 1fr 120px 120px 220px",
                             gap: 8,
                             alignItems: "center",
                             padding: "8px 10px",
@@ -555,7 +711,16 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                           </div>
                           <div style={{ fontSize: 12, opacity: 0.7 }}>{formatBytes(f.size)}</div>
                           <div style={{ fontSize: 12, opacity: 0.5 }}>{f.id.slice(0, 6)}</div>
-                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                            <button
+                              onClick={() => {
+                                setShareFile(f);
+                                setShareStatus(null);
+                              }}
+                              style={{ padding: "6px 10px", borderRadius: 8 }}
+                            >
+                              Поделиться
+                            </button>
                             <button
                               onClick={async () => {
                                 const ok = window.confirm("Удалить файл?");
