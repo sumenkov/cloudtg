@@ -252,7 +252,8 @@ pub async fn file_move(state: State<'_, AppState>, file_id: String, dir_id: Stri
   info!(event = "file_move", file_id = file_id.as_str(), dir_id = dir_id.as_str(), "Перемещение файла");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
-  files::move_file(db.pool(), tg.as_ref(), &file_id, &dir_id).await.map_err(map_err)?;
+  let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+  files::move_file(db.pool(), tg.as_ref(), chat_id, &file_id, &dir_id).await.map_err(map_err)?;
   Ok(())
 }
 

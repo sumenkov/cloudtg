@@ -263,6 +263,79 @@ fn extract_file_size(content: &Value) -> Option<i64> {
   None
 }
 
+fn file_ref_from_obj(obj: &serde_json::Map<String, Value>) -> Option<(i64, Option<String>)> {
+  let id = obj.get("id").and_then(|v| v.as_i64())?;
+  let remote_id = obj
+    .get("remote")
+    .and_then(|v| v.get("id"))
+    .and_then(|v| v.as_str())
+    .map(|s| s.to_string());
+  Some((id, remote_id))
+}
+
+fn extract_file_ref_from_content(content: &Value) -> Option<(i64, Option<String>)> {
+  let t = content.get("@type").and_then(|v| v.as_str()).unwrap_or("");
+  let pick_nested = |parent: &Value, key: &str, nested: &str| {
+    parent
+      .get(key)
+      .and_then(|v| v.as_object())
+      .and_then(|o| o.get(nested))
+      .and_then(|v| v.as_object())
+      .and_then(file_ref_from_obj)
+  };
+
+  let by_type = match t {
+    "messageDocument" => pick_nested(content, "document", "document")
+      .or_else(|| content.get("document").and_then(|v| v.as_object()).and_then(file_ref_from_obj)),
+    "messageVideo" => pick_nested(content, "video", "video")
+      .or_else(|| content.get("video").and_then(|v| v.as_object()).and_then(file_ref_from_obj)),
+    "messageAudio" => pick_nested(content, "audio", "audio")
+      .or_else(|| content.get("audio").and_then(|v| v.as_object()).and_then(file_ref_from_obj)),
+    "messageVoiceNote" => pick_nested(content, "voice_note", "voice")
+      .or_else(|| content.get("voice_note").and_then(|v| v.as_object()).and_then(file_ref_from_obj)),
+    "messageVideoNote" => pick_nested(content, "video_note", "video")
+      .or_else(|| content.get("video_note").and_then(|v| v.as_object()).and_then(file_ref_from_obj)),
+    "messageAnimation" => pick_nested(content, "animation", "animation")
+      .or_else(|| content.get("animation").and_then(|v| v.as_object()).and_then(file_ref_from_obj)),
+    "messageSticker" => pick_nested(content, "sticker", "sticker")
+      .or_else(|| content.get("sticker").and_then(|v| v.as_object()).and_then(file_ref_from_obj)),
+    _ => None
+  };
+
+  if by_type.is_some() {
+    return by_type;
+  }
+
+  fn find_file_ref(value: &Value) -> Option<(i64, Option<String>)> {
+    match value {
+      Value::Object(map) => {
+        if let Some(found) = file_ref_from_obj(map) {
+          return Some(found);
+        }
+        for (k, v) in map {
+          if k == "thumbnail" || k == "minithumbnail" {
+            continue;
+          }
+          if let Some(found) = find_file_ref(v) {
+            return Some(found);
+          }
+        }
+      }
+      Value::Array(arr) => {
+        for v in arr {
+          if let Some(found) = find_file_ref(v) {
+            return Some(found);
+          }
+        }
+      }
+      _ => {}
+    }
+    None
+  }
+
+  find_file_ref(content)
+}
+
 impl TdlibTelegram {
   pub fn new(
     paths: Paths,
@@ -799,7 +872,7 @@ impl TelegramService for TdlibTelegram {
     Ok(())
   }
 
-  async fn search_storage_messages(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
+  async fn search_chat_messages(&self, chat_id: ChatId, query: String, from_message_id: MessageId, limit: i32)
     -> Result<SearchMessagesResult, TgError> {
     self.ensure_authorized().await?;
     let res = self
@@ -807,7 +880,7 @@ impl TelegramService for TdlibTelegram {
         json!({
           "@type":"searchChatMessages",
           "chat_id": chat_id,
-          "query": "#ocltg",
+          "query": query,
           "from_message_id": from_message_id,
           "offset": 0,
           "limit": limit,
@@ -846,6 +919,11 @@ impl TelegramService for TdlibTelegram {
     }
 
     Ok(SearchMessagesResult { total_count, next_from_message_id, messages })
+  }
+
+  async fn search_storage_messages(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
+    -> Result<SearchMessagesResult, TgError> {
+    self.search_chat_messages(chat_id, "#ocltg".into(), from_message_id, limit).await
   }
 
   async fn send_text_message(&self, chat_id: ChatId, text: String) -> Result<UploadedMessage, TgError> {
@@ -989,6 +1067,73 @@ impl TelegramService for TdlibTelegram {
       .unwrap_or(chat_id);
 
     tracing::info!(event = "tdlib_send_file_done", chat_id = chat_id, message_id = msg_id, "Файл отправлен");
+    Ok(UploadedMessage { chat_id, message_id: msg_id, caption_or_text: caption })
+  }
+
+  async fn send_file_from_message(&self, chat_id: ChatId, message_id: MessageId, caption: String) -> Result<UploadedMessage, TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "tdlib_send_file_from_message", chat_id = chat_id, message_id = message_id, "Отправка файла из сообщения");
+
+    let msg = self
+      .request(
+        json!({
+          "@type":"getMessage",
+          "chat_id": chat_id,
+          "message_id": message_id
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+
+    let content = msg
+      .get("content")
+      .ok_or_else(|| TgError::Other("Не удалось получить содержимое сообщения".into()))?;
+    let (file_id, remote_id) = extract_file_ref_from_content(content)
+      .ok_or_else(|| TgError::Other("Не удалось получить файл из сообщения".into()))?;
+
+    let send_with_input = |input, caption: String| async move {
+      self
+        .request(
+          json!({
+            "@type":"sendMessage",
+            "chat_id": chat_id,
+            "input_message_content": {
+              "@type":"inputMessageDocument",
+              "document": input,
+              "caption": { "@type":"formattedText", "text": caption },
+              "disable_content_type_detection": false
+            }
+          }),
+          Duration::from_secs(60)
+        )
+        .await
+    };
+
+    let res = match send_with_input(json!({ "@type":"inputFileId", "id": file_id }), caption.clone()).await {
+      Ok(v) => Ok(v),
+      Err(first) => {
+        if let Some(remote) = remote_id {
+          match send_with_input(json!({ "@type":"inputFileRemote", "id": remote }), caption.clone()).await {
+            Ok(v) => Ok(v),
+            Err(second) => Err(TgError::Other(format!(
+              "Не удалось отправить файл по id: {first}. По remote: {second}"
+            )))
+          }
+        } else {
+          Err(first)
+        }
+      }
+    }?;
+
+    let msg_id = res
+      .get("id")
+      .and_then(|v| v.as_i64())
+      .ok_or_else(|| TgError::Other("TDLib не вернул message.id".into()))?;
+    let chat_id = res
+      .get("chat_id")
+      .and_then(|v| v.as_i64())
+      .unwrap_or(chat_id);
+
     Ok(UploadedMessage { chat_id, message_id: msg_id, caption_or_text: caption })
   }
 

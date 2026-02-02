@@ -51,6 +51,8 @@ pub trait TelegramService: Send + Sync {
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_delete_channel(&self, chat_id: ChatId) -> Result<(), TgError>;
+  async fn search_chat_messages(&self, chat_id: ChatId, query: String, from_message_id: MessageId, limit: i32)
+    -> Result<SearchMessagesResult, TgError>;
   async fn search_storage_messages(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
     -> Result<SearchMessagesResult, TgError>;
 
@@ -59,6 +61,7 @@ pub trait TelegramService: Send + Sync {
   async fn edit_message_text(&self, chat_id: ChatId, message_id: MessageId, text: String) -> Result<(), TgError>;
   async fn edit_message_caption(&self, chat_id: ChatId, message_id: MessageId, caption: String) -> Result<(), TgError>;
   async fn send_file(&self, chat_id: ChatId, path: std::path::PathBuf, caption: String) -> Result<UploadedMessage, TgError>;
+  async fn send_file_from_message(&self, chat_id: ChatId, message_id: MessageId, caption: String) -> Result<UploadedMessage, TgError>;
   async fn copy_messages(&self, from_chat_id: ChatId, to_chat_id: ChatId, message_ids: Vec<MessageId>)
     -> Result<Vec<Option<MessageId>>, TgError>;
   async fn delete_messages(&self, chat_id: ChatId, message_ids: Vec<MessageId>, revoke: bool) -> Result<(), TgError>;

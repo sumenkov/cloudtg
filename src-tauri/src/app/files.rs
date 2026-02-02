@@ -3,7 +3,7 @@ use sqlx::{SqlitePool, Row};
 use ulid::Ulid;
 use std::path::Path;
 
-use crate::fsmeta::{FileMeta, make_file_caption};
+use crate::fsmeta::{FileMeta, make_file_caption, parse_file_caption};
 use crate::telegram::{TelegramService, ChatId};
 use crate::app::dirs::dir_exists;
 
@@ -114,6 +114,7 @@ pub async fn upload_file(
 pub async fn move_file(
   pool: &SqlitePool,
   tg: &dyn TelegramService,
+  storage_chat_id: ChatId,
   file_id: &str,
   new_dir_id: &str
 ) -> anyhow::Result<()> {
@@ -133,8 +134,8 @@ pub async fn move_file(
   }
   let name: String = row.get("name");
   let hash: String = row.get("hash");
-  let msg_id: i64 = row.get("tg_msg_id");
-  let msg_chat_id: i64 = row.get("tg_chat_id");
+  let mut msg_id: i64 = row.get("tg_msg_id");
+  let mut msg_chat_id: i64 = row.get("tg_chat_id");
   let dir_name = fetch_dir_name(pool, new_dir_id).await?;
 
   let caption = make_file_caption_with_tag(
@@ -147,30 +148,116 @@ pub async fn move_file(
     dir_name.as_deref()
   );
 
-  let mut new_msg_id = msg_id;
-  match tg.edit_message_caption(msg_chat_id, msg_id, caption.clone()).await {
-    Ok(()) => {}
+  let mut edit_error = match tg.edit_message_caption(msg_chat_id, msg_id, caption.clone()).await {
+    Ok(()) => {
+      sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+        .bind(new_dir_id)
+        .bind(msg_chat_id)
+        .bind(msg_id)
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+      return Ok(());
+    }
     Err(e) => {
-      tracing::warn!(event = "file_caption_update_failed", file_id = file_id, error = %e, "Не удалось обновить подпись файла в TG, пробую копирование");
-      match tg.copy_messages(msg_chat_id, msg_chat_id, vec![msg_id]).await {
-        Ok(mut ids) => {
-          if let Some(Some(id)) = ids.pop() {
-            new_msg_id = id;
-            if let Err(e) = tg.edit_message_caption(msg_chat_id, new_msg_id, caption).await {
-              tracing::warn!(event = "file_caption_update_failed", file_id = file_id, error = %e, "Не удалось обновить подпись файла после копирования");
-            }
-            let _ = tg.delete_messages(msg_chat_id, vec![msg_id], true).await;
-          }
-        }
-        Err(e) => {
-          tracing::warn!(event = "file_copy_for_move_failed", file_id = file_id, error = %e, "Не удалось скопировать файл для обновления подписи");
-        }
+      tracing::warn!(
+        event = "file_caption_update_failed",
+        file_id = file_id,
+        error = %e,
+        "Не удалось обновить подпись файла в TG, пробую переотправку"
+      );
+      Some(e.to_string())
+    }
+  };
+
+  if let Some((found_chat_id, found_msg_id)) = find_file_message(tg, msg_chat_id, storage_chat_id, file_id).await? {
+    if found_chat_id != msg_chat_id || found_msg_id != msg_id {
+      msg_chat_id = found_chat_id;
+      msg_id = found_msg_id;
+      sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+        .bind(msg_chat_id)
+        .bind(msg_id)
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+    }
+    match tg.edit_message_caption(msg_chat_id, msg_id, caption.clone()).await {
+      Ok(()) => {
+        sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+          .bind(new_dir_id)
+          .bind(msg_chat_id)
+          .bind(msg_id)
+          .bind(file_id)
+          .execute(pool)
+          .await?;
+        return Ok(());
+      }
+      Err(e) => {
+        edit_error = Some(e.to_string());
       }
     }
   }
 
-  sqlx::query("UPDATE files SET dir_id = ?, tg_msg_id = ? WHERE id = ?")
+  let resend_error = match tg.send_file_from_message(msg_chat_id, msg_id, caption.clone()).await {
+    Ok(uploaded) => {
+      let _ = tg.delete_messages(msg_chat_id, vec![msg_id], true).await;
+      sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
+        .bind(new_dir_id)
+        .bind(uploaded.chat_id)
+        .bind(uploaded.message_id)
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+      return Ok(());
+    }
+    Err(e) => {
+      tracing::warn!(
+        event = "file_resend_for_move_failed",
+        file_id = file_id,
+        error = %e,
+        "Не удалось переотправить файл с новой подписью, пробую копирование"
+      );
+      Some(e.to_string())
+    }
+  };
+
+  let ids = tg
+    .copy_messages(msg_chat_id, msg_chat_id, vec![msg_id])
+    .await
+    .map_err(|e| anyhow::anyhow!("Не удалось скопировать файл для обновления подписи: {e}"))?;
+  let new_msg_id = ids
+    .into_iter()
+    .next()
+    .flatten()
+    .ok_or_else(|| {
+      let mut detail = String::new();
+      if let Some(err) = edit_error.as_deref() {
+        detail.push_str(&format!(" Ошибка редактирования подписи: {err}."));
+      }
+      if let Some(err) = resend_error.as_deref() {
+        detail.push_str(&format!(" Ошибка переотправки: {err}."));
+      }
+      anyhow::anyhow!(
+        "TDLib не вернул id скопированного сообщения.{detail} Возможно, в канале включена защита контента."
+      )
+    })?;
+
+  if let Err(e) = tg.edit_message_caption(msg_chat_id, new_msg_id, caption).await {
+    tracing::warn!(
+      event = "file_caption_update_failed",
+      file_id = file_id,
+      error = %e,
+      "Не удалось обновить подпись файла после копирования"
+    );
+    let _ = tg.delete_messages(msg_chat_id, vec![new_msg_id], true).await;
+    return Err(anyhow::anyhow!("Не удалось обновить подпись файла после копирования"));
+  }
+
+  let _ = tg.delete_messages(msg_chat_id, vec![msg_id], true).await;
+
+  sqlx::query("UPDATE files SET dir_id = ?, tg_chat_id = ?, tg_msg_id = ? WHERE id = ?")
     .bind(new_dir_id)
+    .bind(msg_chat_id)
     .bind(new_msg_id)
     .bind(file_id)
     .execute(pool)
@@ -278,4 +365,63 @@ async fn fetch_dir_name(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Optio
     .fetch_optional(pool)
     .await?;
   Ok(row.map(|r| r.get::<String,_>("name")))
+}
+
+async fn find_file_message(
+  tg: &dyn TelegramService,
+  msg_chat_id: ChatId,
+  storage_chat_id: ChatId,
+  file_id: &str
+) -> anyhow::Result<Option<(ChatId, i64)>> {
+  let query = format!("f={file_id}");
+  let mut from_message_id: i64 = 0;
+
+  for _ in 0..8 {
+    let batch = match tg
+      .search_chat_messages(msg_chat_id, query.clone(), from_message_id, 100)
+      .await {
+      Ok(v) => v,
+      Err(_) => break
+    };
+    for msg in batch.messages {
+      if let Some(caption) = msg.caption.as_deref() {
+        if let Ok(meta) = parse_file_caption(caption) {
+          if meta.file_id == file_id {
+            return Ok(Some((msg_chat_id, msg.id)));
+          }
+        }
+      }
+    }
+    if batch.next_from_message_id == 0 {
+      break;
+    }
+    from_message_id = batch.next_from_message_id;
+  }
+
+  if storage_chat_id != msg_chat_id {
+    let mut from_message_id: i64 = 0;
+    for _ in 0..8 {
+      let batch = match tg
+        .search_chat_messages(storage_chat_id, query.clone(), from_message_id, 100)
+        .await {
+        Ok(v) => v,
+        Err(_) => break
+      };
+      for msg in batch.messages {
+        if let Some(caption) = msg.caption.as_deref() {
+          if let Ok(meta) = parse_file_caption(caption) {
+            if meta.file_id == file_id {
+              return Ok(Some((storage_chat_id, msg.id)));
+            }
+          }
+        }
+      }
+      if batch.next_from_message_id == 0 {
+        break;
+      }
+      from_message_id = batch.next_from_message_id;
+    }
+  }
+
+  Ok(None)
 }

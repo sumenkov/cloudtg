@@ -61,6 +61,11 @@ impl TelegramService for MockTelegram {
     Ok(())
   }
 
+  async fn search_chat_messages(&self, _chat_id: ChatId, _query: String, _from_message_id: MessageId, _limit: i32)
+    -> Result<SearchMessagesResult, TgError> {
+    Ok(SearchMessagesResult { total_count: Some(0), next_from_message_id: 0, messages: Vec::new() })
+  }
+
   async fn search_storage_messages(&self, _chat_id: ChatId, _from_message_id: MessageId, _limit: i32)
     -> Result<SearchMessagesResult, TgError> {
     Ok(SearchMessagesResult { total_count: Some(0), next_from_message_id: 0, messages: Vec::new() })
@@ -93,6 +98,12 @@ impl TelegramService for MockTelegram {
     let dest = uploads_dir.join(format!("{}-{}", self.alloc_msg_id(), filename));
     std::fs::copy(&path, &dest).map_err(TgError::Io)?;
 
+    let msg = UploadedMessage { chat_id, message_id: self.alloc_msg_id(), caption_or_text: caption };
+    self.messages.lock().push_back(msg.clone());
+    Ok(msg)
+  }
+
+  async fn send_file_from_message(&self, chat_id: ChatId, _message_id: MessageId, caption: String) -> Result<UploadedMessage, TgError> {
     let msg = UploadedMessage { chat_id, message_id: self.alloc_msg_id(), caption_or_text: caption };
     self.messages.lock().push_back(msg.clone());
     Ok(msg)
