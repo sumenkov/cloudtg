@@ -3,14 +3,12 @@ use std::path::{Path, PathBuf};
 use sqlx::Row;
 use chrono::Utc;
 use serde::Deserialize;
-use ulid::Ulid;
-
 use crate::state::{AppState, AuthState};
-use crate::app::{dirs, sync, files};
+use crate::app::{dirs, sync, files, indexer};
 use crate::settings;
 use crate::secrets::{self, CredentialsSource};
 use crate::paths::Paths;
-use crate::fsmeta::{DirMeta, make_dir_message, parse_dir_message, parse_file_caption, FileMeta};
+use crate::fsmeta::{DirMeta, make_dir_message};
 use tracing::info;
 
 #[derive(serde::Serialize)]
@@ -69,6 +67,16 @@ pub struct TgSettingsInput {
   pub tdlib_path: Option<String>
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchInput {
+  pub dir_id: Option<String>,
+  pub name: Option<String>,
+  pub hash: Option<String>,
+  pub file_type: Option<String>,
+  pub limit: Option<i64>
+}
+
 fn map_err(e: anyhow::Error) -> String { format!("{e:#}") }
 
 fn emit_sync(app: &AppHandle, state: &str, message: &str, processed: i64, total: Option<i64>) {
@@ -90,9 +98,9 @@ async fn download_file_path(state: &AppState, file_id: &str) -> anyhow::Result<P
 }
 
 fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
-  let path_str = path.to_string_lossy().to_string();
   #[cfg(target_os = "windows")]
   {
+    let path_str = path.to_string_lossy().to_string();
     std::process::Command::new("cmd")
       .args(["/C", "start", "", &path_str])
       .spawn()?;
@@ -100,6 +108,7 @@ fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
   }
   #[cfg(target_os = "macos")]
   {
+    let path_str = path.to_string_lossy().to_string();
     std::process::Command::new("open")
       .arg(&path_str)
       .spawn()?;
@@ -108,7 +117,7 @@ fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
   #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
   {
     std::process::Command::new("xdg-open")
-      .arg(&path_str)
+      .arg(path)
       .spawn()?;
     return Ok(());
   }
@@ -140,128 +149,6 @@ fn open_folder_for_file(path: &Path) -> anyhow::Result<()> {
       .spawn()?;
     return Ok(());
   }
-}
-
-const UNASSIGNED_DIR_NAME: &str = "Неразобранное";
-
-fn hash_short_from_seed(seed: &str) -> String {
-  use sha2::{Digest, Sha256};
-  let mut hasher = Sha256::new();
-  hasher.update(seed.as_bytes());
-  let digest = hex::encode(hasher.finalize());
-  digest.chars().take(8).collect()
-}
-
-fn folder_hashtag(name: &str) -> Option<String> {
-  let trimmed = name.trim();
-  if trimmed.is_empty() {
-    return None;
-  }
-  let mut out = String::new();
-  let mut last_underscore = false;
-  for ch in trimmed.chars() {
-    if ch.is_alphanumeric() {
-      out.push(ch);
-      last_underscore = false;
-    } else if ch == '_' || ch.is_whitespace() || ch == '-' || ch == '.' {
-      if !last_underscore {
-        out.push('_');
-        last_underscore = true;
-      }
-    }
-  }
-  let cleaned = out.trim_matches('_').to_string();
-  if cleaned.is_empty() {
-    None
-  } else {
-    Some(format!("#{cleaned}"))
-  }
-}
-
-fn make_file_caption_with_tag(meta: &FileMeta, dir_name: Option<&str>) -> String {
-  let base = crate::fsmeta::make_file_caption(meta);
-  if let Some(tag) = dir_name.and_then(folder_hashtag) {
-    format!("{base} {tag}")
-  } else {
-    base
-  }
-}
-
-fn is_reserved_tag(tag: &str) -> bool {
-  matches!(tag, "ocltg" | "v1" | "file" | "dir")
-}
-
-fn extract_folder_tags(caption: &str) -> Vec<String> {
-  let mut tags = Vec::new();
-  let mut chars = caption.chars().peekable();
-  while let Some(ch) = chars.next() {
-    if ch != '#' {
-      continue;
-    }
-    let mut tag = String::new();
-    while let Some(&c) = chars.peek() {
-      if c.is_alphanumeric() || c == '_' || c == '-' {
-        tag.push(c);
-        chars.next();
-      } else {
-        break;
-      }
-    }
-    if tag.is_empty() {
-      continue;
-    }
-    let lowered = tag.to_lowercase();
-    if is_reserved_tag(lowered.as_str()) {
-      continue;
-    }
-    tags.push(tag);
-  }
-  tags
-}
-
-fn normalize_tag_name(tag: &str) -> Option<String> {
-  let mut out = String::new();
-  let mut last_space = false;
-  for ch in tag.chars() {
-    let mapped = if ch == '_' || ch == '-' { ' ' } else { ch };
-    if mapped.is_whitespace() {
-      if !last_space {
-        out.push(' ');
-        last_space = true;
-      }
-    } else {
-      out.push(mapped);
-      last_space = false;
-    }
-  }
-  let cleaned = out.trim().to_string();
-  if cleaned.is_empty() { None } else { Some(cleaned) }
-}
-
-async fn find_dir_by_name(pool: &sqlx::SqlitePool, name: &str) -> anyhow::Result<Option<(String, String)>> {
-  let row = sqlx::query(
-    "SELECT id, name FROM directories
-     WHERE lower(name) = lower(?)
-     ORDER BY (parent_id IS NULL) DESC, updated_at DESC
-     LIMIT 1"
-  )
-    .bind(name)
-    .fetch_optional(pool)
-    .await?;
-  Ok(row.map(|r| (r.get::<String,_>("id"), r.get::<String,_>("name"))))
-}
-
-async fn ensure_dir_by_name(
-  pool: &sqlx::SqlitePool,
-  tg: &dyn crate::telegram::TelegramService,
-  storage_chat_id: i64,
-  name: &str
-) -> anyhow::Result<(String, String)> {
-  if let Some(found) = find_dir_by_name(pool, name).await? {
-    return Ok(found);
-  }
-  let id = dirs::create_dir(pool, tg, storage_chat_id, None, name.to_string()).await?;
-  Ok((id, name.to_string()))
 }
 
 async fn ensure_storage_chat_id(state: &AppState) -> anyhow::Result<i64> {
@@ -423,6 +310,21 @@ pub async fn dir_list_tree(state: State<'_, AppState>) -> Result<crate::app::mod
 pub async fn file_list(state: State<'_, AppState>, dir_id: String) -> Result<Vec<files::FileItem>, String> {
   let db = state.db().map_err(map_err)?;
   files::list_files(db.pool(), &dir_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn file_search(state: State<'_, AppState>, input: FileSearchInput) -> Result<Vec<files::FileItem>, String> {
+  let db = state.db().map_err(map_err)?;
+  files::search_files(
+    db.pool(),
+    input.dir_id.as_deref(),
+    input.name.as_deref(),
+    input.hash.as_deref(),
+    input.file_type.as_deref(),
+    input.limit
+  )
+  .await
+  .map_err(map_err)
 }
 
 #[tauri::command]
@@ -662,7 +564,7 @@ pub async fn tg_sync_storage(app: AppHandle, state: State<'_, AppState>) -> Resu
 
     let mut from_message_id: i64 = 0;
     let mut processed: i64 = 0;
-    let mut total: Option<i64> = None;
+    let total: Option<i64> = None;
     let mut dir_count: i64 = 0;
     let mut file_count: i64 = 0;
     let mut imported_count: i64 = 0;
@@ -696,125 +598,20 @@ pub async fn tg_sync_storage(app: AppHandle, state: State<'_, AppState>) -> Resu
         if newest_seen.is_none() {
           newest_seen = Some(msg.id);
         }
-        if let Some(text) = msg.text.as_deref() {
-          if let Ok(meta) = parse_dir_message(text) {
-            upsert_dir(pool, &meta, msg.id, msg.date).await.map_err(map_err)?;
-            dir_count += 1;
-            continue;
-          }
+        let outcome = indexer::index_storage_message(pool, tg.as_ref(), chat_id, &msg, &mut unassigned_dir)
+          .await
+          .map_err(map_err)?;
+        if outcome.dir {
+          dir_count += 1;
         }
-
-        if let Some(caption) = msg.caption.as_deref() {
-          if let Ok(meta) = parse_file_caption(caption) {
-            upsert_file(pool, &meta, chat_id, msg.id, msg.date, msg.file_size.unwrap_or(0)).await.map_err(map_err)?;
-            file_count += 1;
-            continue;
-          }
+        if outcome.file {
+          file_count += 1;
         }
-
-        let has_file = msg.file_size.is_some()
-          || msg.file_name.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
-        if !has_file {
-          continue;
+        if outcome.imported {
+          imported_count += 1;
         }
-
-        let caption_text = msg.caption.clone().unwrap_or_default();
-        let mut preferred_name: Option<String> = None;
-        let mut target: Option<(String, String)> = None;
-        for tag in extract_folder_tags(&caption_text) {
-          let Some(name) = normalize_tag_name(&tag) else { continue; };
-          if preferred_name.is_none() {
-            preferred_name = Some(name.clone());
-          }
-          if let Some(found) = find_dir_by_name(pool, &name).await.map_err(map_err)? {
-            target = Some(found);
-            break;
-          }
-        }
-
-        let target = if let Some(found) = target {
-          found
-        } else if let Some(name) = preferred_name {
-          ensure_dir_by_name(pool, tg.as_ref(), chat_id, &name).await.map_err(map_err)?
-        } else {
-          if unassigned_dir.is_none() {
-            unassigned_dir = Some(ensure_dir_by_name(pool, tg.as_ref(), chat_id, UNASSIGNED_DIR_NAME).await.map_err(map_err)?);
-          }
-          unassigned_dir.clone().unwrap()
-        };
-
-        let file_id = Ulid::new().to_string();
-        let file_name = msg.file_name.clone().filter(|v| !v.trim().is_empty())
-          .unwrap_or_else(|| format!("файл_{}", msg.id));
-        let size = msg.file_size.unwrap_or(0);
-        let hash_short = hash_short_from_seed(&format!("{chat_id}:{msg_id}:{file_name}:{size}", msg_id = msg.id));
-        let caption = make_file_caption_with_tag(
-          &FileMeta {
-            dir_id: target.0.clone(),
-            file_id: file_id.clone(),
-            name: file_name.clone(),
-            hash_short: hash_short.clone()
-          },
-          Some(target.1.as_str())
-        );
-
-        let mut new_msg_id = msg.id;
-        if let Err(e) = tg.edit_message_caption(chat_id, msg.id, caption.clone()).await {
-          tracing::warn!(
-            event = "storage_import_edit_failed",
-            message_id = msg.id,
-            error = %e,
-            "Не удалось обновить подпись сообщения, пробую переотправку"
-          );
-          match tg.send_file_from_message(chat_id, msg.id, caption.clone()).await {
-            Ok(uploaded) => {
-              let _ = tg.delete_messages(chat_id, vec![msg.id], true).await;
-              new_msg_id = uploaded.message_id;
-            }
-            Err(err) => {
-              tracing::warn!(
-                event = "storage_import_resend_failed",
-                message_id = msg.id,
-                error = %err,
-                "Не удалось переотправить файл при импорте"
-              );
-              failed_count += 1;
-              continue;
-            }
-          }
-        }
-
-        let created_at = if msg.date > 0 { msg.date } else { Utc::now().timestamp() };
-        let inserted = sqlx::query(
-          "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-          .bind(&file_id)
-          .bind(&target.0)
-          .bind(&file_name)
-          .bind(size)
-          .bind(&hash_short)
-          .bind(chat_id)
-          .bind(new_msg_id)
-          .bind(created_at)
-          .execute(pool)
-          .await;
-
-        match inserted {
-          Ok(_) => {
-            file_count += 1;
-            imported_count += 1;
-          }
-          Err(e) => {
-            tracing::warn!(
-              event = "storage_import_db_failed",
-              file_id = file_id.as_str(),
-              error = %e,
-              "Не удалось сохранить импортированный файл"
-            );
-            let _ = tg.delete_messages(chat_id, vec![new_msg_id], true).await;
-            failed_count += 1;
-          }
+        if outcome.failed {
+          failed_count += 1;
         }
       }
 
@@ -1130,82 +927,6 @@ async fn flush_file_batch(
   }
 
   items.clear();
-  Ok(())
-}
-
-async fn upsert_dir(pool: &sqlx::SqlitePool, meta: &DirMeta, msg_id: i64, date: i64) -> anyhow::Result<()> {
-  let parent_id = if meta.parent_id == "ROOT" || meta.parent_id.trim().is_empty() {
-    None
-  } else {
-    Some(meta.parent_id.as_str())
-  };
-  if let Some(pid) = parent_id {
-    ensure_dir_placeholder(pool, pid, date).await?;
-  }
-  sqlx::query(
-    "INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at) VALUES(?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id, name=excluded.name, tg_msg_id=excluded.tg_msg_id, updated_at=excluded.updated_at"
-  )
-    .bind(&meta.dir_id)
-    .bind(parent_id)
-    .bind(&meta.name)
-    .bind(msg_id)
-    .bind(date)
-    .execute(pool)
-    .await?;
-  Ok(())
-}
-
-async fn upsert_file(
-  pool: &sqlx::SqlitePool,
-  meta: &FileMeta,
-  chat_id: i64,
-  msg_id: i64,
-  date: i64,
-  size: i64
-) -> anyhow::Result<()> {
-  ensure_dir_placeholder(pool, &meta.dir_id, date).await?;
-
-  sqlx::query(
-    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET dir_id=excluded.dir_id, name=excluded.name, size=excluded.size, hash=excluded.hash, tg_chat_id=excluded.tg_chat_id, tg_msg_id=excluded.tg_msg_id, created_at=excluded.created_at"
-  )
-    .bind(&meta.file_id)
-    .bind(&meta.dir_id)
-    .bind(&meta.name)
-    .bind(size)
-    .bind(&meta.hash_short)
-    .bind(chat_id)
-    .bind(msg_id)
-    .bind(date)
-    .execute(pool)
-    .await?;
-  Ok(())
-}
-
-async fn ensure_dir_placeholder(pool: &sqlx::SqlitePool, dir_id: &str, date: i64) -> anyhow::Result<()> {
-  if dir_id.trim().is_empty() {
-    return Ok(());
-  }
-  let placeholder = "Неизвестная папка";
-  let inserted = sqlx::query(
-    "INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at)
-     VALUES(?, NULL, ?, NULL, ?)
-     ON CONFLICT(id) DO NOTHING"
-  )
-    .bind(dir_id)
-    .bind(placeholder)
-    .bind(date)
-    .execute(pool)
-    .await?;
-  if inserted.rows_affected() > 0 {
-    tracing::debug!(
-      event = "storage_sync_dir_placeholder",
-      dir_id = dir_id,
-      "Добавлена заглушка директории"
-    );
-  }
   Ok(())
 }
 

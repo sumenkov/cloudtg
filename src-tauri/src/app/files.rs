@@ -1,5 +1,5 @@
 use chrono::Utc;
-use sqlx::{SqlitePool, Row};
+use sqlx::{SqlitePool, Row, QueryBuilder};
 use ulid::Ulid;
 use std::path::{Path, PathBuf};
 
@@ -62,6 +62,64 @@ pub async fn list_files(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Vec<F
   Ok(out)
 }
 
+pub async fn search_files(
+  pool: &SqlitePool,
+  dir_id: Option<&str>,
+  name: Option<&str>,
+  hash: Option<&str>,
+  file_type: Option<&str>,
+  limit: Option<i64>
+) -> anyhow::Result<Vec<FileItem>> {
+  let mut builder = QueryBuilder::new(
+    "SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at FROM files"
+  );
+  let mut separated = builder.separated(" WHERE ");
+
+  if let Some(dir_id) = dir_id.filter(|v| !v.trim().is_empty() && *v != "ROOT") {
+    separated.push("dir_id = ").push_bind(dir_id);
+  }
+
+  if let Some(name) = name.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+    separated
+      .push("lower(name) LIKE ")
+      .push_bind(format!("%{}%", name.to_lowercase()));
+  }
+
+  if let Some(hash) = hash.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+    separated
+      .push("lower(hash) LIKE ")
+      .push_bind(format!("%{}%", hash.to_lowercase()));
+  }
+
+  if let Some(file_type) = file_type.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+    let trimmed = file_type.trim_start_matches('.');
+    if !trimmed.is_empty() {
+      separated
+        .push("lower(name) LIKE ")
+        .push_bind(format!("%.{trimmed}", trimmed = trimmed.to_lowercase()));
+    }
+  }
+
+  builder.push(" ORDER BY name");
+  builder.push(" LIMIT ").push_bind(limit.unwrap_or(500).max(1));
+
+  let rows = builder.build().fetch_all(pool).await?;
+  let mut out = Vec::with_capacity(rows.len());
+  for row in rows {
+    out.push(FileItem {
+      id: row.get::<String,_>("id"),
+      dir_id: row.get::<String,_>("dir_id"),
+      name: row.get::<String,_>("name"),
+      size: row.get::<i64,_>("size"),
+      hash: row.get::<String,_>("hash"),
+      tg_chat_id: row.get::<i64,_>("tg_chat_id"),
+      tg_msg_id: row.get::<i64,_>("tg_msg_id"),
+      created_at: row.get::<i64,_>("created_at")
+    });
+  }
+  Ok(out)
+}
+
 pub async fn upload_file(
   pool: &SqlitePool,
   tg: &dyn TelegramService,
@@ -96,7 +154,9 @@ pub async fn upload_file(
   let created_at = Utc::now().timestamp();
 
   sqlx::query(
-    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at)\n     VALUES(?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET dir_id=excluded.dir_id, name=excluded.name, size=excluded.size, hash=excluded.hash, tg_chat_id=excluded.tg_chat_id, tg_msg_id=excluded.tg_msg_id"
   )
     .bind(&id)
     .bind(dir_id)

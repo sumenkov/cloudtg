@@ -21,10 +21,13 @@ use tar::Archive;
 use zip::ZipArchive;
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use image::imageops::FilterType;
+use chrono::Utc;
+use parking_lot::Mutex;
 
 use crate::paths::Paths;
 use crate::state::{AppState, AuthState};
 use crate::secrets::TgCredentials;
+use crate::app::{indexer, sync};
 use super::{ChatId, MessageId, TelegramService, TgError, UploadedMessage, HistoryMessage, SearchMessagesResult, ChatInfo};
 
 #[derive(Clone)]
@@ -127,7 +130,9 @@ impl TdlibClient {
 
 pub struct TdlibTelegram {
   tx: mpsc::Sender<TdlibCommand>,
-  paths: Paths
+  paths: Paths,
+  send_waiters: std::sync::Arc<Mutex<HashMap<i64, oneshot::Sender<anyhow::Result<i64>>>>>,
+  send_results: std::sync::Arc<Mutex<HashMap<i64, Result<i64, String>>>>
 }
 
 enum TdlibCommand {
@@ -301,6 +306,89 @@ fn extract_file_name(content: &Value) -> Option<String> {
   None
 }
 
+fn history_message_from_content(message_id: i64, date: i64, content: &Value) -> HistoryMessage {
+  let (text, caption, file_size, file_name) = (
+    extract_text(content),
+    extract_caption(content),
+    extract_file_size(content),
+    extract_file_name(content)
+  );
+  HistoryMessage { id: message_id, date, text, caption, file_size, file_name }
+}
+
+fn history_message_from_object(message: &Value) -> Option<(ChatId, HistoryMessage)> {
+  let chat_id = message.get("chat_id").and_then(|v| v.as_i64())?;
+  let message_id = message.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+  if message_id == 0 {
+    return None;
+  }
+  let date = message.get("date").and_then(|v| v.as_i64()).unwrap_or(0);
+  let (text, caption, file_size, file_name) = if let Some(content) = message.get("content") {
+    (extract_text(content), extract_caption(content), extract_file_size(content), extract_file_name(content))
+  } else {
+    (None, None, None, None)
+  };
+  Some((chat_id, HistoryMessage { id: message_id, date, text, caption, file_size, file_name }))
+}
+
+fn schedule_storage_index(app: &tauri::AppHandle, chat_id: i64, msg: HistoryMessage) {
+  let app = app.clone();
+  tauri::async_runtime::spawn(async move {
+    let state = app.state::<AppState>();
+    let db = match state.db() {
+      Ok(db) => db,
+      Err(e) => {
+        tracing::debug!(event = "storage_index_skip", error = %e, "База данных еще не готова");
+        return;
+      }
+    };
+    let pool = db.pool();
+    let storage_chat_id = match sync::get_sync(pool, "storage_chat_id").await {
+      Ok(Some(v)) => v.parse::<i64>().ok(),
+      Ok(None) => None,
+      Err(e) => {
+        tracing::debug!(event = "storage_index_skip", error = %e, "Не удалось прочитать storage_chat_id");
+        None
+      }
+    };
+    let Some(storage_chat_id) = storage_chat_id else { return; };
+    if storage_chat_id != chat_id {
+      return;
+    }
+
+    let tg = match state.telegram() {
+      Ok(tg) => tg,
+      Err(e) => {
+        tracing::debug!(event = "storage_index_skip", error = %e, "Telegram сервис еще не готов");
+        return;
+      }
+    };
+
+    let mut unassigned = None;
+    match indexer::index_storage_message(pool, tg.as_ref(), storage_chat_id, &msg, &mut unassigned).await {
+      Ok(outcome) => {
+        if outcome.dir || outcome.file || outcome.imported {
+          let _ = app.emit("tree_updated", ());
+        }
+      }
+      Err(e) => {
+        tracing::warn!(event = "storage_index_failed", error = %e, "Не удалось обработать обновление");
+      }
+    }
+
+    if msg.id > 0 {
+      let current = sync::get_sync(pool, "storage_last_message_id")
+        .await
+        .ok()
+        .and_then(|v| v.and_then(|s| s.parse::<i64>().ok()))
+        .unwrap_or(0);
+      if msg.id > current {
+        let _ = sync::set_sync(pool, "storage_last_message_id", &msg.id.to_string()).await;
+      }
+    }
+  });
+}
+
 fn file_ref_from_obj(obj: &serde_json::Map<String, Value>) -> Option<(i64, Option<String>)> {
   let id = obj.get("id").and_then(|v| v.as_i64())?;
   let remote_id = obj
@@ -448,9 +536,13 @@ impl TdlibTelegram {
     initial_tdlib_path: Option<String>
   ) -> anyhow::Result<Self> {
     let (tx, rx) = mpsc::channel::<TdlibCommand>();
+    let send_waiters = std::sync::Arc::new(Mutex::new(HashMap::new()));
+    let send_results = std::sync::Arc::new(Mutex::new(HashMap::new()));
 
     let app_for_thread = app.clone();
     let paths_for_thread = paths.clone();
+    let waiters_for_thread = send_waiters.clone();
+    let results_for_thread = send_results.clone();
     let session_name = tdlib_session_name();
     let mut config = match initial_settings {
       Some(s) => Some(TdlibConfig::from_settings(&paths, s.api_id, s.api_hash, &session_name)?),
@@ -579,7 +671,9 @@ impl TdlibTelegram {
               &mut waiting_for_params,
               &mut params_sent,
               &app_for_thread,
-              &mut last_state
+              &mut last_state,
+              &waiters_for_thread,
+              &results_for_thread
             ) {
               tracing::error!("Ошибка TDLib: {e}");
             }
@@ -592,7 +686,7 @@ impl TdlibTelegram {
       }
     });
 
-    Ok(Self { tx, paths })
+    Ok(Self { tx, paths, send_waiters, send_results })
   }
 
   async fn request(&self, payload: Value, timeout: Duration) -> Result<Value, TgError> {
@@ -1370,7 +1464,42 @@ impl TelegramService for TdlibTelegram {
       .and_then(|v| v.as_i64())
       .unwrap_or(chat_id);
 
-    Ok(UploadedMessage { chat_id, message_id: msg_id, caption_or_text: caption })
+    let final_id = if msg_id > 0 {
+      msg_id
+    } else {
+      let immediate = { self.send_results.lock().remove(&msg_id) };
+      if let Some(result) = immediate {
+        match result {
+          Ok(id) if id > 0 => id,
+          Ok(_) => return Err(TgError::Other("TDLib вернул некорректный id отправленного сообщения".into())),
+          Err(err) => return Err(TgError::Other(err))
+        }
+      } else {
+        let (tx, rx) = oneshot::channel();
+        {
+          let mut guard = self.send_waiters.lock();
+          guard.insert(msg_id, tx);
+        }
+        match tokio::time::timeout(Duration::from_secs(20), rx).await {
+          Ok(Ok(Ok(id))) if id > 0 => id,
+          Ok(Ok(Ok(_))) => {
+            return Err(TgError::Other("TDLib вернул некорректный id отправленного сообщения".into()));
+          }
+          Ok(Ok(Err(e))) => {
+            return Err(TgError::Other(e.to_string()));
+          }
+          Ok(Err(_)) => {
+            return Err(TgError::Other("TDLib не подтвердил отправку сообщения".into()));
+          }
+          Err(_) => {
+            self.send_waiters.lock().remove(&msg_id);
+            return Err(TgError::Other("Таймаут подтверждения отправки сообщения".into()));
+          }
+        }
+      }
+    };
+
+    Ok(UploadedMessage { chat_id, message_id: final_id, caption_or_text: caption })
   }
 
   async fn forward_message(&self, from_chat_id: ChatId, to_chat_id: ChatId, message_id: MessageId) -> Result<MessageId, TgError> {
@@ -1524,6 +1653,36 @@ impl TelegramService for TdlibTelegram {
     }
     std::fs::copy(&src_path, &target).map_err(TgError::Io)?;
     Ok(target)
+  }
+
+  async fn message_exists(&self, chat_id: ChatId, message_id: MessageId) -> Result<bool, TgError> {
+    self.ensure_authorized().await?;
+    let res = self
+      .request(
+        json!({
+          "@type":"getMessage",
+          "chat_id": chat_id,
+          "message_id": message_id
+        }),
+        Duration::from_secs(10)
+      )
+      .await;
+
+    match res {
+      Ok(v) => {
+        let id = v.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        Ok(id == message_id)
+      }
+      Err(TgError::Other(msg)) => {
+        let lowered = msg.to_lowercase();
+        if lowered.contains("not found") || lowered.contains("message not found") {
+          Ok(false)
+        } else {
+          Err(TgError::Other(msg))
+        }
+      }
+      Err(e) => Err(e)
+    }
   }
 }
 
@@ -2184,7 +2343,9 @@ fn handle_tdlib_response(
   waiting_for_params: &mut bool,
   params_sent: &mut bool,
   app: &tauri::AppHandle,
-  last_state: &mut Option<AuthState>
+  last_state: &mut Option<AuthState>,
+  send_waiters: &std::sync::Arc<Mutex<HashMap<i64, oneshot::Sender<anyhow::Result<i64>>>>>,
+  send_results: &std::sync::Arc<Mutex<HashMap<i64, Result<i64, String>>>>
 ) -> anyhow::Result<()> {
   let t = v.get("@type").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -2197,6 +2358,68 @@ fn handle_tdlib_response(
 
   if t.starts_with("authorizationState") {
     handle_auth_state(&v, client, config, waiting_for_params, params_sent, app, last_state)?;
+    return Ok(());
+  }
+
+  if t == "updateNewMessage" {
+    if let Some(message) = v.get("message") {
+      if let Some((chat_id, msg)) = history_message_from_object(message) {
+        schedule_storage_index(app, chat_id, msg);
+      }
+    }
+    return Ok(());
+  }
+
+  if t == "updateMessageContent" {
+    let chat_id = v.get("chat_id").and_then(|v| v.as_i64()).unwrap_or(0);
+    let message_id = v.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
+    if chat_id != 0 && message_id != 0 {
+      if let Some(content) = v.get("new_content") {
+        let msg = history_message_from_content(message_id, Utc::now().timestamp(), content);
+        schedule_storage_index(app, chat_id, msg);
+      }
+    }
+    return Ok(());
+  }
+
+  if t == "updateMessageSendSucceeded" {
+    if let Some(old_id) = v.get("old_message_id").and_then(|v| v.as_i64()) {
+      let new_id = v
+        .get("message")
+        .and_then(|m| m.get("id"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+      if let Some(tx) = send_waiters.lock().remove(&old_id) {
+        let _ = tx.send(Ok(new_id));
+      } else {
+        let mut guard = send_results.lock();
+        guard.insert(old_id, Ok(new_id));
+        if guard.len() > 128 {
+          guard.clear();
+        }
+      }
+    }
+    return Ok(());
+  }
+
+  if t == "updateMessageSendFailed" {
+    if let Some(old_id) = v.get("old_message_id").and_then(|v| v.as_i64()) {
+      let err = v
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("Не удалось отправить сообщение")
+        .to_string();
+      if let Some(tx) = send_waiters.lock().remove(&old_id) {
+        let _ = tx.send(Err(anyhow::anyhow!(err.clone())));
+      } else {
+        let mut guard = send_results.lock();
+        guard.insert(old_id, Err(err));
+        if guard.len() > 128 {
+          guard.clear();
+        }
+      }
+    }
     return Ok(());
   }
 

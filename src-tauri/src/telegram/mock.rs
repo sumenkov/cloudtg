@@ -149,6 +149,10 @@ impl TelegramService for MockTelegram {
     Ok(target)
   }
 
+  async fn message_exists(&self, _chat_id: ChatId, _message_id: MessageId) -> Result<bool, TgError> {
+    Ok(true)
+  }
+
   async fn delete_messages(&self, _chat_id: ChatId, _message_ids: Vec<MessageId>, _revoke: bool) -> Result<(), TgError> {
     Ok(())
   }

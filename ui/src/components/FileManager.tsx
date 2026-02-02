@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAppStore, DirNode, ChatItem, FileItem } from "../store/app";
+import { listenSafe } from "../tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 function containsNode(root: DirNode, id: string): boolean {
@@ -133,6 +134,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     deleteDir,
     files,
     refreshFiles,
+    searchFiles,
     pickFiles,
     uploadFile,
     moveFiles,
@@ -158,6 +160,12 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const [shareResults, setShareResults] = useState<ChatItem[]>([]);
   const [shareBusy, setShareBusy] = useState(false);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
+  const [searchName, setSearchName] = useState("");
+  const [searchHash, setSearchHash] = useState("");
+  const [searchType, setSearchType] = useState("");
+  const [searchAll, setSearchAll] = useState(false);
+  const [searchActive, setSearchActive] = useState(false);
+  const [searchBusy, setSearchBusy] = useState(false);
 
   useEffect(() => {
     if (!tree) return;
@@ -179,17 +187,59 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     return findNode(tree, parentId);
   }, [tree, parentId]);
 
+  const runSearch = async () => {
+    if (!selectedNode) return;
+    const name = searchName.trim();
+    const hash = searchHash.trim();
+    const fileType = searchType.trim();
+    if (!name && !hash && !fileType) {
+      setSearchActive(false);
+      await refreshFiles(selectedNode.id);
+      setSelectedFiles(new Set());
+      return;
+    }
+    try {
+      setSearchBusy(true);
+      await searchFiles({
+        dirId: searchAll ? null : selectedNode.id,
+        name: name || undefined,
+        hash: hash || undefined,
+        fileType: fileType || undefined
+      });
+      setSearchActive(true);
+      setSelectedFiles(new Set());
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setSearchBusy(false);
+    }
+  };
+
+  const reloadFiles = async () => {
+    if (!selectedNode) return;
+    if (searchActive) {
+      await runSearch();
+    } else {
+      await refreshFiles(selectedNode.id);
+    }
+  };
+
   useEffect(() => {
     if (!selectedNode) {
       setRenameValue("");
       setMoveParentId("ROOT");
       setSelectedFiles(new Set());
-    setShareFile(null);
-    setShareResults([]);
-    setShareQuery("");
-    setShareStatus(null);
-    return;
-  }
+      setShareFile(null);
+      setShareResults([]);
+      setShareQuery("");
+      setShareStatus(null);
+      setSearchName("");
+      setSearchHash("");
+      setSearchType("");
+      setSearchAll(false);
+      setSearchActive(false);
+      return;
+    }
     setRenameValue(selectedNode.name);
     setMoveParentId(selectedNode.parent_id ?? "ROOT");
     setSelectedFiles(new Set());
@@ -197,6 +247,11 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     setShareResults([]);
     setShareQuery("");
     setShareStatus(null);
+    setSearchName("");
+    setSearchHash("");
+    setSearchType("");
+    setSearchAll(false);
+    setSearchActive(false);
   }, [selectedNode]);
 
   useEffect(() => {
@@ -236,6 +291,33 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    (async () => {
+      try {
+        unlisten = await listenSafe("tree_updated", async () => {
+          if (!selectedNode || isRootSelected) return;
+          await reloadFiles();
+        });
+      } catch (e: any) {
+        setError(String(e));
+      }
+    })();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [
+    selectedNode,
+    isRootSelected,
+    searchActive,
+    searchName,
+    searchHash,
+    searchType,
+    searchAll,
+    reloadFiles,
+    setError
+  ]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
     const win = getCurrentWindow();
     win
       .onDragDropEvent((event) => {
@@ -257,7 +339,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
               for (const path of paths) {
                 await uploadFile(selectedNode.id, path);
               }
-              await refreshFiles(selectedNode.id);
+              await reloadFiles();
             } catch (e: any) {
               setError(String(e));
             }
@@ -476,7 +558,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                       for (const path of paths) {
                         await uploadFile(selectedNode.id, path);
                       }
-                      await refreshFiles(selectedNode.id);
+                      await reloadFiles();
                     } catch (e: any) {
                       setError(String(e));
                     }
@@ -487,6 +569,90 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                 </button>
                 <div style={{ fontSize: 12, opacity: 0.6 }}>
                   Всего: {files.length}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 10, padding: 12, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
+                <b>Поиск</b>
+                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 160px", gap: 8 }}>
+                  <input
+                    value={searchName}
+                    onChange={(e) => setSearchName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        runSearch();
+                      }
+                    }}
+                    placeholder="Имя"
+                    style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                  />
+                  <input
+                    value={searchHash}
+                    onChange={(e) => setSearchHash(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        runSearch();
+                      }
+                    }}
+                    placeholder="Хэш"
+                    style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                  />
+                  <input
+                    value={searchType}
+                    onChange={(e) => setSearchType(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        runSearch();
+                      }
+                    }}
+                    placeholder="Тип (например pdf)"
+                    style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                  />
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.8 }}>
+                    <input
+                      type="checkbox"
+                      checked={searchAll}
+                      onChange={(e) => setSearchAll(e.target.checked)}
+                    />
+                    Во всех папках
+                  </label>
+                </div>
+                <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    onClick={runSearch}
+                    disabled={searchBusy}
+                    style={{ padding: "6px 10px", borderRadius: 8 }}
+                  >
+                    Найти
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedNode) return;
+                      setSearchName("");
+                      setSearchHash("");
+                      setSearchType("");
+                      setSearchAll(false);
+                      setSearchActive(false);
+                      setSelectedFiles(new Set());
+                      try {
+                        await refreshFiles(selectedNode.id);
+                      } catch (e: any) {
+                        setError(String(e));
+                      }
+                    }}
+                    disabled={searchBusy}
+                    style={{ padding: "6px 10px", borderRadius: 8, opacity: searchActive ? 1 : 0.7 }}
+                  >
+                    Сброс
+                  </button>
+                  {searchActive ? (
+                    <div style={{ fontSize: 12, opacity: 0.6 }}>
+                      Найдено: {files.length}
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -514,7 +680,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                     if (ids.length === 0 || !fileMoveTarget) return;
                     try {
                       await moveFiles(ids, fileMoveTarget);
-                      await refreshFiles(selectedNode.id);
+                      await reloadFiles();
                       setSelectedFiles(new Set());
                     } catch (e: any) {
                       setError(String(e));
@@ -537,7 +703,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                     if (!ok) return;
                     try {
                       await deleteFiles(ids);
-                      await refreshFiles(selectedNode.id);
+                      await reloadFiles();
                       setSelectedFiles(new Set());
                     } catch (e: any) {
                       setError(String(e));
@@ -766,7 +932,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                                 if (!ok) return;
                                 try {
                                   await deleteFiles([f.id]);
-                                  if (selectedNode) await refreshFiles(selectedNode.id);
+                                  if (selectedNode) await reloadFiles();
                                   setSelectedFiles((prev) => {
                                     const next = new Set(prev);
                                     next.delete(f.id);

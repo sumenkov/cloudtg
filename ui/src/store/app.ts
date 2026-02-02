@@ -26,6 +26,14 @@ export type ChatItem = {
   username: string | null;
 };
 
+export type FileSearchFilters = {
+  dirId?: string | null;
+  name?: string;
+  hash?: string;
+  fileType?: string;
+  limit?: number;
+};
+
 type State = {
   auth: "unknown" | "wait_config" | "wait_phone" | "wait_code" | "wait_password" | "ready" | "closed";
   tree: DirNode | null;
@@ -71,6 +79,7 @@ type State = {
   moveDir: (dirId: string, parentId: string | null) => Promise<void>;
   deleteDir: (dirId: string) => Promise<void>;
   refreshFiles: (dirId: string) => Promise<void>;
+  searchFiles: (filters: FileSearchFilters) => Promise<void>;
   pickFiles: () => Promise<string[]>;
   uploadFile: (dirId: string, path: string) => Promise<void>;
   moveFiles: (fileIds: string[], dirId: string) => Promise<void>;
@@ -177,6 +186,10 @@ export const useAppStore = create<State>((set, get) => ({
   },
   refreshFiles: async (dirId) => {
     const items = await invokeSafe<FileItem[]>("file_list", { dirId });
+    set({ files: items });
+  },
+  searchFiles: async (filters) => {
+    const items = await invokeSafe<FileItem[]>("file_search", filters);
     set({ files: items });
   },
   pickFiles: async () => {

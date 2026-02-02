@@ -53,6 +53,7 @@ fn main() {
       commands::dir_delete,
       commands::dir_list_tree,
       commands::file_list,
+      commands::file_search,
       commands::file_pick,
       commands::file_upload,
       commands::file_move,

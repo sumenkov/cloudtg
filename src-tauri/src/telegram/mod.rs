@@ -81,6 +81,7 @@ pub trait TelegramService: Send + Sync {
   async fn delete_messages(&self, chat_id: ChatId, message_ids: Vec<MessageId>, revoke: bool) -> Result<(), TgError>;
 
   async fn download_message_file(&self, chat_id: ChatId, message_id: MessageId, target: std::path::PathBuf) -> Result<std::path::PathBuf, TgError>;
+  async fn message_exists(&self, chat_id: ChatId, message_id: MessageId) -> Result<bool, TgError>;
 }
 
 #[cfg(feature = "mock_telegram")]
