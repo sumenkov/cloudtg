@@ -1,7 +1,7 @@
 {
   "productName": "CloudTG",
   "version": "0.3.1",
-  "identifier": "com.cloudtg.app",
+  "identifier": "com.cloudtg.desktop",
   "build": {
     "beforeDevCommand": "npm --workspace ui run dev",
     "beforeBuildCommand": "npm --workspace ui run build",
