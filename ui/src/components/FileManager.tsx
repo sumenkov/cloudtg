@@ -25,6 +25,8 @@ function collectIds(node: DirNode, out: Set<string>) {
   for (const c of node.children) collectIds(c, out);
 }
 
+const REPAIR_NEED_FILE = "REPAIR_NEED_FILE";
+
 type FlatNode = { id: string; label: string };
 
 function flattenTree(node: DirNode, depth: number, out: FlatNode[], exclude: Set<string>) {
@@ -148,6 +150,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     renameDir,
     moveDir,
     deleteDir,
+    repairDir,
     files,
     refreshFiles,
     searchFiles,
@@ -155,6 +158,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     uploadFile,
     moveFiles,
     deleteFiles,
+    repairFile,
     downloadFile,
     openFile,
     openFileFolder,
@@ -541,6 +545,32 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
             </div>
           </div>
         </div>
+
+        {selectedNode && !isRootSelected && selectedNode.is_broken ? (
+          <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
+            <b>Восстановление</b>
+            <div style={{ marginTop: 8 }}>
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await repairDir(selectedNode.id);
+                    if (!res.ok) {
+                      setError(res.message);
+                    }
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+                style={{ padding: 10, borderRadius: 10 }}
+              >
+                Восстановить папку
+              </button>
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
+                Пересоздает/обновляет сообщение папки в канале хранения.
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
           <b>Файлы</b>
@@ -958,6 +988,30 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                             >
                               Поделиться
                             </button>
+                            {f.is_broken ? (
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    let res = await repairFile(f.id);
+                                    if (!res.ok && res.code === REPAIR_NEED_FILE) {
+                                      const paths = await pickFiles();
+                                      if (!paths || paths.length === 0) return;
+                                      res = await repairFile(f.id, paths[0]);
+                                    }
+                                    if (!res.ok) {
+                                      setError(res.message);
+                                      return;
+                                    }
+                                    await reloadFiles();
+                                  } catch (e: any) {
+                                    setError(String(e));
+                                  }
+                                }}
+                                style={{ padding: "6px 10px", borderRadius: 8 }}
+                              >
+                                Восстановить
+                              </button>
+                            ) : null}
                             <button
                               onClick={async () => {
                                 const ok = window.confirm("Удалить файл?");

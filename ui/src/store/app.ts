@@ -21,6 +21,12 @@ export type FileItem = {
   is_broken: boolean;
 };
 
+export type RepairResult = {
+  ok: boolean;
+  message: string;
+  code?: string | null;
+};
+
 export type ChatItem = {
   id: number;
   title: string;
@@ -80,12 +86,14 @@ type State = {
   renameDir: (dirId: string, name: string) => Promise<void>;
   moveDir: (dirId: string, parentId: string | null) => Promise<void>;
   deleteDir: (dirId: string) => Promise<void>;
+  repairDir: (dirId: string) => Promise<RepairResult>;
   refreshFiles: (dirId: string) => Promise<void>;
   searchFiles: (filters: FileSearchFilters) => Promise<void>;
   pickFiles: () => Promise<string[]>;
   uploadFile: (dirId: string, path: string) => Promise<void>;
   moveFiles: (fileIds: string[], dirId: string) => Promise<void>;
   deleteFiles: (fileIds: string[]) => Promise<void>;
+  repairFile: (fileId: string, path?: string) => Promise<RepairResult>;
   downloadFile: (fileId: string) => Promise<string>;
   openFile: (fileId: string) => Promise<void>;
   openFileFolder: (fileId: string) => Promise<void>;
@@ -186,6 +194,11 @@ export const useAppStore = create<State>((set, get) => ({
     await invokeSafe("dir_delete", { dirId });
     await get().refreshTree();
   },
+  repairDir: async (dirId) => {
+    const res = await invokeSafe<RepairResult>("dir_repair", { dirId });
+    await get().refreshTree();
+    return res;
+  },
   refreshFiles: async (dirId) => {
     const items = await invokeSafe<FileItem[]>("file_list", { dirId });
     set({ files: items });
@@ -213,6 +226,9 @@ export const useAppStore = create<State>((set, get) => ({
     } else {
       await invokeSafe("file_delete_many", { fileIds });
     }
+  },
+  repairFile: async (fileId, path) => {
+    return invokeSafe<RepairResult>("file_repair", { fileId, path: path ?? null });
   },
   downloadFile: async (fileId) => {
     return invokeSafe<string>("file_download", { fileId });

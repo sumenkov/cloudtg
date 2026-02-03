@@ -39,6 +39,12 @@ pub struct FileItem {
   pub is_broken: bool
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairFileResult {
+  Repaired,
+  NeedFile
+}
+
 pub async fn list_files(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Vec<FileItem>> {
   let rows = sqlx::query(
     "SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken FROM files WHERE dir_id = ? ORDER BY name"
@@ -462,6 +468,90 @@ pub async fn download_file(
   Ok(path)
 }
 
+pub async fn repair_file(
+  pool: &SqlitePool,
+  tg: &dyn TelegramService,
+  paths: &Paths,
+  storage_chat_id: ChatId,
+  file_id: &str,
+  upload_path: Option<&Path>
+) -> anyhow::Result<RepairFileResult> {
+  let row = sqlx::query("SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id FROM files WHERE id = ?")
+    .bind(file_id)
+    .fetch_optional(pool)
+    .await?;
+  let Some(row) = row else {
+    return Err(anyhow::anyhow!("Файл не найден"));
+  };
+
+  let dir_id: String = row.get("dir_id");
+  let name: String = row.get("name");
+  let size: i64 = row.get("size");
+  let hash: String = row.get("hash");
+  let mut msg_chat_id: i64 = row.get("tg_chat_id");
+  let mut msg_id: i64 = row.get("tg_msg_id");
+  let dir_name = fetch_dir_name(pool, &dir_id).await?;
+  let caption = make_file_caption_with_tag(
+    &FileMeta {
+      dir_id: dir_id.clone(),
+      file_id: file_id.to_string(),
+      name: name.clone(),
+      hash_short: hash.clone()
+    },
+    dir_name.as_deref()
+  );
+
+  if tg.edit_message_caption(msg_chat_id, msg_id, caption.clone()).await.is_ok() {
+    sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
+      .bind(msg_chat_id)
+      .bind(msg_id)
+      .bind(file_id)
+      .execute(pool)
+      .await?;
+    return Ok(RepairFileResult::Repaired);
+  }
+
+  if let Ok(Some((found_chat_id, found_msg_id))) =
+    find_file_message(tg, msg_chat_id, storage_chat_id, file_id).await
+  {
+    msg_chat_id = found_chat_id;
+    msg_id = found_msg_id;
+    if tg.edit_message_caption(msg_chat_id, msg_id, caption.clone()).await.is_ok() {
+      sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
+        .bind(msg_chat_id)
+        .bind(msg_id)
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+      return Ok(RepairFileResult::Repaired);
+    }
+  }
+
+  let source_path = if let Some(p) = upload_path {
+    Some(p.to_path_buf())
+  } else {
+    let dir_path = build_dir_path(pool, &dir_id).await?;
+    find_local_download(paths, &dir_path, &name, size)
+  };
+
+  let Some(source_path) = source_path else {
+    return Ok(RepairFileResult::NeedFile);
+  };
+  if !source_path.is_file() {
+    return Err(anyhow::anyhow!("Файл не найден"));
+  }
+
+  let uploaded = tg.send_file(storage_chat_id, source_path, caption).await?;
+  sqlx::query("UPDATE files SET tg_chat_id = ?, tg_msg_id = ?, is_broken = 0 WHERE id = ?")
+    .bind(uploaded.chat_id)
+    .bind(uploaded.message_id)
+    .bind(file_id)
+    .execute(pool)
+    .await?;
+
+  Ok(RepairFileResult::Repaired)
+}
+
 pub fn build_message_link(chat_id: i64, message_id: i64) -> anyhow::Result<String> {
   if chat_id >= 0 {
     return Err(anyhow::anyhow!("Ссылка доступна только для сообщений каналов"));
@@ -615,6 +705,42 @@ fn is_name_variant(base_stem: &str, candidate_stem: &str) -> bool {
     return false;
   };
   !num.is_empty() && num.chars().all(|c| c.is_ascii_digit())
+}
+
+fn find_local_download(paths: &Paths, dir_path: &Path, name: &str, size: i64) -> Option<PathBuf> {
+  let base_dir = paths.cache_dir.join("downloads").join(dir_path);
+  if !base_dir.exists() {
+    return None;
+  }
+
+  let mut safe = sanitize_component(name);
+  if safe.is_empty() {
+    safe = "файл".to_string();
+  }
+  let (stem, ext) = split_name(&safe);
+
+  let entries = std::fs::read_dir(&base_dir).ok()?;
+  for entry in entries.flatten() {
+    let path = entry.path();
+    if !path.is_file() {
+      continue;
+    }
+    let file_name = path.file_name().and_then(|n| n.to_str());
+    let Some(file_name) = file_name else { continue; };
+    let (cand_stem, cand_ext) = split_name(file_name);
+    if cand_ext != ext || !is_name_variant(&stem, &cand_stem) {
+      continue;
+    }
+    if size > 0 {
+      if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() as i64 != size {
+          continue;
+        }
+      }
+    }
+    return Some(path);
+  }
+  None
 }
 
 pub async fn find_file_message(

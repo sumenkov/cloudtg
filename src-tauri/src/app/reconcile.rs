@@ -69,12 +69,12 @@ pub async fn reconcile_recent(
   let max_id = messages.iter().map(|m| m.id).max().unwrap_or(0);
 
   let (marked_dirs, cleared_dirs) = if min_id > 0 {
-    mark_broken_dirs(pool, min_id, &seen_dirs).await?
+    mark_broken_dirs(pool, min_id, max_id, &seen_dirs).await?
   } else {
     (0, 0)
   };
   let (marked_files, cleared_files) = if min_id > 0 {
-    mark_broken_files(pool, storage_chat_id, min_id, &seen_files).await?
+    mark_broken_files(pool, storage_chat_id, min_id, max_id, &seen_files).await?
   } else {
     (0, 0)
   };
@@ -141,12 +141,16 @@ async fn fetch_recent_messages(
 async fn mark_broken_dirs(
   pool: &SqlitePool,
   min_message_id: i64,
+  max_message_id: i64,
   seen: &HashSet<i64>
 ) -> anyhow::Result<(i64, i64)> {
   let rows = sqlx::query(
-    "SELECT id, tg_msg_id, is_broken FROM directories WHERE tg_msg_id IS NOT NULL AND tg_msg_id >= ?"
+    "SELECT id, tg_msg_id, is_broken
+     FROM directories
+     WHERE tg_msg_id IS NOT NULL AND tg_msg_id >= ? AND tg_msg_id <= ?"
   )
     .bind(min_message_id)
+    .bind(max_message_id)
     .fetch_all(pool)
     .await?;
 
@@ -183,13 +187,17 @@ async fn mark_broken_files(
   pool: &SqlitePool,
   storage_chat_id: ChatId,
   min_message_id: i64,
+  max_message_id: i64,
   seen: &HashSet<i64>
 ) -> anyhow::Result<(i64, i64)> {
   let rows = sqlx::query(
-    "SELECT id, tg_msg_id, is_broken FROM files WHERE tg_chat_id = ? AND tg_msg_id >= ?"
+    "SELECT id, tg_msg_id, is_broken
+     FROM files
+     WHERE tg_chat_id = ? AND tg_msg_id >= ? AND tg_msg_id <= ?"
   )
     .bind(storage_chat_id)
     .bind(min_message_id)
+    .bind(max_message_id)
     .fetch_all(pool)
     .await?;
 

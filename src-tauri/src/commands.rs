@@ -65,6 +65,16 @@ pub struct TgReconcileResult {
   pub imported: i64
 }
 
+#[derive(serde::Serialize)]
+pub struct RepairResult {
+  pub ok: bool,
+  pub message: String,
+  pub code: Option<String>
+}
+
+const RECONCILE_SYNC_REQUIRED: &str = "RECONCILE_SYNC_REQUIRED";
+const REPAIR_NEED_FILE: &str = "REPAIR_NEED_FILE";
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TgSettingsInput {
@@ -310,6 +320,20 @@ pub async fn dir_delete(app: AppHandle, state: State<'_, AppState>, dir_id: Stri
 }
 
 #[tauri::command]
+pub async fn dir_repair(app: AppHandle, state: State<'_, AppState>, dir_id: String) -> Result<RepairResult, String> {
+  info!(event = "dir_repair", dir_id = dir_id.as_str(), "Восстановление директории");
+  if dir_id == "ROOT" {
+    return Err("Нельзя восстановить корневую папку".into());
+  }
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+  dirs::repair_dir(db.pool(), tg.as_ref(), chat_id, &dir_id).await.map_err(map_err)?;
+  let _ = app.emit("tree_updated", ());
+  Ok(RepairResult { ok: true, message: "Папка восстановлена.".to_string(), code: None })
+}
+
+#[tauri::command]
 pub async fn dir_list_tree(state: State<'_, AppState>) -> Result<crate::app::models::DirNode, String> {
   let db = state.db().map_err(map_err)?;
   dirs::list_tree(db.pool()).await.map_err(map_err)
@@ -373,6 +397,31 @@ pub async fn file_delete(state: State<'_, AppState>, file_id: String) -> Result<
   let paths = state.paths().map_err(map_err)?;
   files::delete_file(db.pool(), tg.as_ref(), &paths, &file_id).await.map_err(map_err)?;
   Ok(())
+}
+
+#[tauri::command]
+pub async fn file_repair(state: State<'_, AppState>, file_id: String, path: Option<String>) -> Result<RepairResult, String> {
+  info!(event = "file_repair", file_id = file_id.as_str(), "Восстановление файла");
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  let paths = state.paths().map_err(map_err)?;
+  let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+  let path = path.as_deref().map(std::path::Path::new);
+  let outcome = files::repair_file(db.pool(), tg.as_ref(), &paths, chat_id, &file_id, path)
+    .await
+    .map_err(map_err)?;
+  match outcome {
+    files::RepairFileResult::Repaired => Ok(RepairResult {
+      ok: true,
+      message: "Файл восстановлен.".to_string(),
+      code: None
+    }),
+    files::RepairFileResult::NeedFile => Ok(RepairResult {
+      ok: false,
+      message: "Не удалось восстановить файл: нужно выбрать файл для переотправки.".to_string(),
+      code: Some(REPAIR_NEED_FILE.to_string())
+    })
+  }
 }
 
 #[tauri::command]
@@ -673,13 +722,23 @@ pub async fn tg_sync_storage(app: AppHandle, state: State<'_, AppState>) -> Resu
 pub async fn tg_reconcile_recent(
   app: AppHandle,
   state: State<'_, AppState>,
-  limit: Option<i64>
+  limit: Option<i64>,
+  force: Option<bool>
 ) -> Result<TgReconcileResult, String> {
   let res: Result<TgReconcileResult, String> = async {
     let limit = limit.unwrap_or(100).max(1);
+    let db = state.db().map_err(map_err)?;
+    let force = force.unwrap_or(false);
+
+    let sync_done = sync::get_sync(db.pool(), "storage_sync_done").await.map_err(map_err)?;
+    if sync_done.is_none() && !force {
+      return Err(format!(
+        "{RECONCILE_SYNC_REQUIRED}: Сначала запусти импорт из канала хранения или подтверди запуск без него."
+      ));
+    }
+
     emit_sync(&app, "start", &format!("Реконсайл последних {limit} сообщений"), 0, Some(limit));
 
-    let db = state.db().map_err(map_err)?;
     let tg = state.telegram().map_err(map_err)?;
     let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
 
@@ -886,7 +945,7 @@ async fn reseed_storage_channel(
     let parent_id = raw_parent.filter(|p| !p.trim().is_empty() && p != "ROOT").unwrap_or_else(|| "ROOT".to_string());
     let msg = make_dir_message(&DirMeta { dir_id: id.clone(), parent_id, name });
     let uploaded = tg.send_dir_message(new_chat_id, msg).await?;
-    sqlx::query("UPDATE directories SET tg_msg_id = ?, updated_at = ? WHERE id = ?")
+    sqlx::query("UPDATE directories SET tg_msg_id = ?, updated_at = ?, is_broken = 0 WHERE id = ?")
       .bind(uploaded.message_id)
       .bind(now)
       .bind(&id)

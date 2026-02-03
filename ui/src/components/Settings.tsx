@@ -13,6 +13,8 @@ type TgSettingsView = {
   };
 };
 
+const RECONCILE_SYNC_REQUIRED = "RECONCILE_SYNC_REQUIRED";
+
 export function Settings({ onClose }: { onClose?: () => void }) {
   const { setError, refreshAuth, refreshSettings, refreshTree, tdlibBuild, tdlibLogs, tgSettings } = useAppStore();
   const creds = tgSettings.credentials;
@@ -29,6 +31,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
   const [creating, setCreating] = useState(false);
   const [reconcileStatus, setReconcileStatus] = useState<string | null>(null);
   const [reconcileBusy, setReconcileBusy] = useState(false);
+  const [reconcileLimit, setReconcileLimit] = useState("100");
   const buildState = tdlibBuild.state;
   const isBuilding =
     buildState === "start" ||
@@ -209,19 +212,48 @@ export function Settings({ onClose }: { onClose?: () => void }) {
       </label>
 
       <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
-        <b>Реконсайл последних 100 сообщений</b>
+        <b>Реконсайл последних {reconcileLimit || "100"} сообщений</b>
         <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-          Проверяет последние сообщения в канале хранения и помечает битые записи.
+          Проверяет последние сообщения в канале хранения и помечает битые записи. Если папка старая — увеличь лимит.
         </div>
         <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            value={reconcileLimit}
+            onChange={(e) => setReconcileLimit(e.target.value)}
+            placeholder="100"
+            style={{ width: 120, padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+          />
           <button
             onClick={async () => {
               try {
                 setReconcileBusy(true);
                 setReconcileStatus("Проверяю...");
-                const res = await invokeSafe<{ message: string }>("tg_reconcile_recent", { limit: 100 });
-                setReconcileStatus(res.message || "Готово.");
-                await refreshTree();
+                const limitValue = Number.parseInt(reconcileLimit.trim() || "100", 10);
+                if (!Number.isFinite(limitValue) || limitValue <= 0) {
+                  throw new Error("Некорректный лимит сообщений");
+                }
+                try {
+                  const res = await invokeSafe<{ message: string }>("tg_reconcile_recent", { limit: limitValue });
+                  setReconcileStatus(res.message || "Готово.");
+                  await refreshTree();
+                } catch (e: any) {
+                  const msg = String(e);
+                  if (msg.includes(RECONCILE_SYNC_REQUIRED)) {
+                    const ok = window.confirm(
+                      "Импорт из канала хранения ещё не запускался. Реконсайл может пропустить старые сообщения. Продолжить?"
+                    );
+                    if (!ok) {
+                      setReconcileStatus("Реконсайл отменен.");
+                      return;
+                    }
+                    const res = await invokeSafe<{ message: string }>("tg_reconcile_recent", { limit: limitValue, force: true });
+                    setReconcileStatus(res.message || "Готово.");
+                    await refreshTree();
+                  } else {
+                    setReconcileStatus("Не удалось выполнить реконсайл");
+                    setError(msg);
+                  }
+                }
               } catch (e: any) {
                 setReconcileStatus("Не удалось выполнить реконсайл");
                 setError(String(e));

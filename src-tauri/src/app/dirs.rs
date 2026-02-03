@@ -154,6 +154,24 @@ pub async fn delete_dir(
   Ok(())
 }
 
+pub async fn repair_dir(
+  pool: &SqlitePool,
+  tg: &dyn TelegramService,
+  chat_id: ChatId,
+  dir_id: &str
+) -> anyhow::Result<()> {
+  let dir = fetch_dir(pool, dir_id).await?;
+  let msg_id = ensure_dir_message(tg, chat_id, &dir, dir.parent_id.clone(), &dir.name).await?;
+  let updated_at = Utc::now().timestamp();
+  sqlx::query("UPDATE directories SET tg_msg_id = ?, updated_at = ?, is_broken = 0 WHERE id = ?")
+    .bind(msg_id)
+    .bind(updated_at)
+    .bind(dir_id)
+    .execute(pool)
+    .await?;
+  Ok(())
+}
+
 pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
   let rows = sqlx::query("SELECT id, parent_id, name, is_broken FROM directories ORDER BY name")
     .fetch_all(pool)
