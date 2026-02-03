@@ -91,7 +91,6 @@ pub struct TgSettingsInput {
 pub struct FileSearchInput {
   pub dir_id: Option<String>,
   pub name: Option<String>,
-  pub hash: Option<String>,
   pub file_type: Option<String>,
   pub limit: Option<i64>
 }
@@ -352,7 +351,6 @@ pub async fn file_search(state: State<'_, AppState>, input: FileSearchInput) -> 
     db.pool(),
     input.dir_id.as_deref(),
     input.name.as_deref(),
-    input.hash.as_deref(),
     input.file_type.as_deref(),
     input.limit
   )

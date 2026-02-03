@@ -37,7 +37,6 @@ export type ChatItem = {
 export type FileSearchFilters = {
   dirId?: string | null;
   name?: string;
-  hash?: string;
   fileType?: string;
   limit?: number;
 };
@@ -204,7 +203,7 @@ export const useAppStore = create<State>((set, get) => ({
     set({ files: items });
   },
   searchFiles: async (filters) => {
-    const items = await invokeSafe<FileItem[]>("file_search", filters);
+    const items = await invokeSafe<FileItem[]>("file_search", { input: filters });
     set({ files: items });
   },
   pickFiles: async () => {

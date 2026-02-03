@@ -74,38 +74,38 @@ pub async fn search_files(
   pool: &SqlitePool,
   dir_id: Option<&str>,
   name: Option<&str>,
-  hash: Option<&str>,
   file_type: Option<&str>,
   limit: Option<i64>
 ) -> anyhow::Result<Vec<FileItem>> {
   let mut builder = QueryBuilder::new(
     "SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken FROM files"
   );
-  let mut separated = builder.separated(" WHERE ");
+  let dir_id = dir_id.filter(|v| !v.trim().is_empty() && *v != "ROOT");
+  let name = name.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+  let file_type = file_type
+    .map(|v| v.trim().to_string())
+    .filter(|v| !v.is_empty())
+    .and_then(|v| {
+      let trimmed = v.trim_start_matches('.').trim().to_string();
+      if trimmed.is_empty() { None } else { Some(trimmed) }
+    });
 
-  if let Some(dir_id) = dir_id.filter(|v| !v.trim().is_empty() && *v != "ROOT") {
-    separated.push("dir_id = ").push_bind(dir_id);
+  builder.push(" WHERE 1=1");
+
+  if let Some(dir_id) = dir_id {
+    builder.push(" AND dir_id = ").push_bind(dir_id);
   }
 
-  if let Some(name) = name.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
-    separated
-      .push("lower(name) LIKE ")
+  if let Some(name) = name {
+    builder
+      .push(" AND lower(name) LIKE ")
       .push_bind(format!("%{}%", name.to_lowercase()));
   }
 
-  if let Some(hash) = hash.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
-    separated
-      .push("lower(hash) LIKE ")
-      .push_bind(format!("%{}%", hash.to_lowercase()));
-  }
-
-  if let Some(file_type) = file_type.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
-    let trimmed = file_type.trim_start_matches('.');
-    if !trimmed.is_empty() {
-      separated
-        .push("lower(name) LIKE ")
-        .push_bind(format!("%.{trimmed}", trimmed = trimmed.to_lowercase()));
-    }
+  if let Some(file_type) = file_type {
+    builder
+      .push(" AND lower(name) LIKE ")
+      .push_bind(format!("%.{file_type}", file_type = file_type.to_lowercase()));
   }
 
   builder.push(" ORDER BY name");

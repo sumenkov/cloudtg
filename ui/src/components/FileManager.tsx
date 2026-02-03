@@ -181,7 +181,6 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
   const [searchName, setSearchName] = useState("");
-  const [searchHash, setSearchHash] = useState("");
   const [searchType, setSearchType] = useState("");
   const [searchAll, setSearchAll] = useState(false);
   const [searchActive, setSearchActive] = useState(false);
@@ -210,9 +209,8 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const runSearch = async () => {
     if (!selectedNode) return;
     const name = searchName.trim();
-    const hash = searchHash.trim();
     const fileType = searchType.trim();
-    if (!name && !hash && !fileType) {
+    if (!name && !fileType) {
       setSearchActive(false);
       await refreshFiles(selectedNode.id);
       setSelectedFiles(new Set());
@@ -223,7 +221,6 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       await searchFiles({
         dirId: searchAll ? null : selectedNode.id,
         name: name || undefined,
-        hash: hash || undefined,
         fileType: fileType || undefined
       });
       setSearchActive(true);
@@ -254,7 +251,6 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       setShareQuery("");
       setShareStatus(null);
       setSearchName("");
-      setSearchHash("");
       setSearchType("");
       setSearchAll(false);
       setSearchActive(false);
@@ -268,7 +264,6 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     setShareQuery("");
     setShareStatus(null);
     setSearchName("");
-    setSearchHash("");
     setSearchType("");
     setSearchAll(false);
     setSearchActive(false);
@@ -329,7 +324,6 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     isRootSelected,
     searchActive,
     searchName,
-    searchHash,
     searchType,
     searchAll,
     reloadFiles,
@@ -618,9 +612,9 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                 </div>
               </div>
 
-              <div style={{ marginTop: 10, padding: 12, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
-                <b>Поиск</b>
-                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 160px", gap: 8 }}>
+                <div style={{ marginTop: 10, padding: 12, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
+                  <b>Поиск</b>
+                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 160px", gap: 8 }}>
                   <input
                     value={searchName}
                     onChange={(e) => setSearchName(e.target.value)}
@@ -631,18 +625,6 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                       }
                     }}
                     placeholder="Имя"
-                    style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
-                  />
-                  <input
-                    value={searchHash}
-                    onChange={(e) => setSearchHash(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        runSearch();
-                      }
-                    }}
-                    placeholder="Хэш"
                     style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
                   />
                   <input
@@ -678,7 +660,6 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                     onClick={async () => {
                       if (!selectedNode) return;
                       setSearchName("");
-                      setSearchHash("");
                       setSearchType("");
                       setSearchAll(false);
                       setSearchActive(false);
