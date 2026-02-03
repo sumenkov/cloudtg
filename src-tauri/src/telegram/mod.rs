@@ -60,6 +60,8 @@ pub trait TelegramService: Send + Sync {
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_create_channel(&self) -> Result<ChatId, TgError>;
   async fn storage_delete_channel(&self, chat_id: ChatId) -> Result<(), TgError>;
+  async fn backup_check_channel(&self, chat_id: ChatId) -> Result<bool, TgError>;
+  async fn backup_get_or_create_channel(&self) -> Result<ChatId, TgError>;
   async fn chat_history(&self, chat_id: ChatId, from_message_id: MessageId, limit: i32)
     -> Result<SearchMessagesResult, TgError>;
   async fn search_chat_messages(&self, chat_id: ChatId, query: String, from_message_id: MessageId, limit: i32)

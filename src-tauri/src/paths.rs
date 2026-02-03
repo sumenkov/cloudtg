@@ -60,6 +60,18 @@ impl Paths {
   pub fn sqlite_path(&self) -> PathBuf {
     self.data_dir.join("cloudtg.sqlite")
   }
+
+  pub fn backup_dir(&self) -> PathBuf {
+    self.cache_dir.join("backups")
+  }
+
+  pub fn pending_restore_path(&self) -> PathBuf {
+    self.data_dir.join("cloudtg.sqlite.pending")
+  }
+
+  pub fn previous_db_path(&self) -> PathBuf {
+    self.data_dir.join("cloudtg.sqlite.prev")
+  }
 }
 
 #[cfg(not(target_os = "windows"))]

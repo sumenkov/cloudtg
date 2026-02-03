@@ -72,6 +72,9 @@ fn main() {
       commands::tg_create_channel,
       commands::tg_sync_storage,
       commands::tg_reconcile_recent,
+      commands::backup_create,
+      commands::backup_restore,
+      commands::backup_open_channel,
       commands::settings_get_tg,
       commands::settings_set_tg,
       commands::settings_unlock_tg

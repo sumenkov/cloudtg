@@ -4,5 +4,6 @@ pub mod dirs;
 pub mod files;
 pub mod indexer;
 pub mod reconcile;
+pub mod backup;
 
 pub use models::*;

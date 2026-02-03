@@ -4,7 +4,7 @@ use sqlx::Row;
 use chrono::Utc;
 use serde::Deserialize;
 use crate::state::{AppState, AuthState};
-use crate::app::{dirs, sync, files, indexer, reconcile};
+use crate::app::{backup, dirs, sync, files, indexer, reconcile};
 use crate::settings;
 use crate::secrets::{self, CredentialsSource};
 use crate::paths::Paths;
@@ -63,6 +63,11 @@ pub struct TgReconcileResult {
   pub marked: i64,
   pub cleared: i64,
   pub imported: i64
+}
+
+#[derive(serde::Serialize)]
+pub struct BackupResult {
+  pub message: String
 }
 
 #[derive(serde::Serialize)]
@@ -136,6 +141,30 @@ fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
   {
     std::process::Command::new("xdg-open")
       .arg(path)
+      .spawn()?;
+    return Ok(());
+  }
+}
+
+fn open_url_in_os(url: &str) -> anyhow::Result<()> {
+  #[cfg(target_os = "windows")]
+  {
+    std::process::Command::new("explorer")
+      .arg(url)
+      .spawn()?;
+    return Ok(());
+  }
+  #[cfg(target_os = "macos")]
+  {
+    std::process::Command::new("open")
+      .arg(url)
+      .spawn()?;
+    return Ok(());
+  }
+  #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+  {
+    std::process::Command::new("xdg-open")
+      .arg(url)
       .spawn()?;
     return Ok(());
   }
@@ -215,6 +244,29 @@ async fn ensure_storage_chat_id(state: &AppState) -> anyhow::Result<i64> {
     }
   }
 
+  Ok(chat_id)
+}
+
+async fn ensure_backup_chat_id(state: &AppState) -> anyhow::Result<i64> {
+  let db = state.db()?;
+  let pool = db.pool();
+  let tg = state.telegram()?;
+
+  if let Some(v) = sync::get_sync(pool, "backup_chat_id").await? {
+    if let Ok(id) = v.parse::<i64>() {
+      if tg.backup_check_channel(id).await.unwrap_or(false) {
+        info!(event = "backup_chat_id_cached", chat_id = id, "Использую сохраненный backup_chat_id");
+        return Ok(id);
+      }
+      info!(event = "backup_chat_id_invalid", chat_id = id, "Канал бэкапов недоступен, создаю новый");
+    } else {
+      info!(event = "backup_chat_id_invalid", value = v, "Некорректный backup_chat_id, создаю новый");
+    }
+  }
+
+  let chat_id = tg.backup_get_or_create_channel().await?;
+  sync::set_sync(pool, "backup_chat_id", &chat_id.to_string()).await?;
+  info!(event = "backup_chat_id_saved", chat_id = chat_id, "backup_chat_id сохранен");
   Ok(chat_id)
 }
 
@@ -772,6 +824,117 @@ pub async fn tg_reconcile_recent(
   }
 
   res
+}
+
+#[tauri::command]
+pub async fn backup_create(state: State<'_, AppState>) -> Result<BackupResult, String> {
+  let db = state.db().map_err(map_err)?;
+  let tg = state.telegram().map_err(map_err)?;
+  let paths = state.paths().map_err(map_err)?;
+  let chat_id = ensure_backup_chat_id(&state).await.map_err(map_err)?;
+
+  let snapshot = backup::create_backup_snapshot(db.pool(), &paths).await.map_err(map_err)?;
+  let caption = backup::build_backup_caption(env!("CARGO_PKG_VERSION"));
+  let res = tg.send_file(chat_id, snapshot.clone(), caption).await.map_err(|e| e.to_string())?;
+  let _ = std::fs::remove_file(&snapshot);
+
+  info!(event = "backup_created", chat_id = res.chat_id, message_id = res.message_id, "Бэкап отправлен в канал");
+  Ok(BackupResult { message: "Бэкап создан и отправлен в канал CloudTG Backups.".into() })
+}
+
+#[tauri::command]
+pub async fn backup_restore(state: State<'_, AppState>) -> Result<BackupResult, String> {
+  let tg = state.telegram().map_err(map_err)?;
+  let paths = state.paths().map_err(map_err)?;
+  let backup_chat_id = ensure_backup_chat_id(&state).await.map_err(map_err)?;
+  let storage_chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
+
+  let backup_msg = tg
+    .search_chat_messages(backup_chat_id, backup::BACKUP_TAG.to_string(), 0, 1)
+    .await
+    .map_err(|e| e.to_string())?
+    .messages
+    .into_iter()
+    .next();
+
+  let latest_storage_date = tg
+    .chat_history(storage_chat_id, 0, 1)
+    .await
+    .map_err(|e| e.to_string())?
+    .messages
+    .first()
+    .map(|m| m.date)
+    .unwrap_or(0);
+
+  let pending_path = paths.pending_restore_path();
+  if pending_path.exists() {
+    let _ = std::fs::remove_file(&pending_path);
+  }
+
+  if let Some(msg) = backup_msg {
+    if latest_storage_date == 0 || msg.date >= latest_storage_date {
+      tg.download_message_file(backup_chat_id, msg.id, pending_path)
+        .await
+        .map_err(|e| e.to_string())?;
+      return Ok(BackupResult {
+        message: "Бэкап найден. Перезапусти приложение, чтобы применить восстановление.".into()
+      });
+    }
+  }
+
+  let tdlib_path = match state.db() {
+    Ok(db) => settings::get_tdlib_path(db.pool()).await.ok().flatten(),
+    Err(_) => None
+  };
+  let tdlib_effective = resolve_tdlib_path_effective(&paths, tdlib_path.as_deref())
+    .map(|p| p.to_string_lossy().to_string());
+
+  backup::rebuild_storage_to_path(
+    &pending_path,
+    tg.as_ref(),
+    storage_chat_id,
+    tdlib_effective.as_deref()
+  )
+    .await
+    .map_err(map_err)?;
+  Ok(BackupResult {
+    message: "Актуальный бэкап не найден. Подготовлена новая база из канала хранения. Перезапусти приложение.".into()
+  })
+}
+
+#[tauri::command]
+pub async fn backup_open_channel(state: State<'_, AppState>) -> Result<BackupResult, String> {
+  let tg = state.telegram().map_err(map_err)?;
+  let backup_chat_id = ensure_backup_chat_id(&state).await.map_err(map_err)?;
+
+  let backup_msg = tg
+    .search_chat_messages(backup_chat_id, backup::BACKUP_TAG.to_string(), 0, 1)
+    .await
+    .map_err(|e| e.to_string())?
+    .messages
+    .into_iter()
+    .next();
+
+  let msg_id = if let Some(msg) = backup_msg {
+    Some(msg.id)
+  } else {
+    tg.chat_history(backup_chat_id, 0, 1)
+      .await
+      .map_err(|e| e.to_string())?
+      .messages
+      .first()
+      .map(|m| m.id)
+  };
+
+  let Some(msg_id) = msg_id else {
+    return Ok(BackupResult {
+      message: format!("Канал бэкапов пуст. chat_id={backup_chat_id}")
+    });
+  };
+
+  let url = files::build_message_link(backup_chat_id, msg_id).map_err(map_err)?;
+  open_url_in_os(&url).map_err(map_err)?;
+  Ok(BackupResult { message: format!("Открываю канал: {url}") })
 }
 
 #[tauri::command]

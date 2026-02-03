@@ -32,6 +32,10 @@ export function Settings({ onClose }: { onClose?: () => void }) {
   const [reconcileStatus, setReconcileStatus] = useState<string | null>(null);
   const [reconcileBusy, setReconcileBusy] = useState(false);
   const [reconcileLimit, setReconcileLimit] = useState("100");
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [openBackupBusy, setOpenBackupBusy] = useState(false);
+  const [backupStatus, setBackupStatus] = useState<string | null>(null);
   const buildState = tdlibBuild.state;
   const isBuilding =
     buildState === "start" ||
@@ -267,6 +271,76 @@ export function Settings({ onClose }: { onClose?: () => void }) {
             Запустить проверку
           </button>
           {reconcileStatus ? <div style={{ fontSize: 12, opacity: 0.7 }}>{reconcileStatus}</div> : null}
+        </div>
+      </div>
+
+      <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
+        <b>Бэкап базы</b>
+        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+          Бэкап сохраняется в отдельный канал <b>CloudTG Backups</b>. При восстановлении применяется после перезапуска.
+        </div>
+        <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            onClick={async () => {
+              try {
+                setBackupBusy(true);
+                setBackupStatus("Создаю бэкап...");
+                const res = await invokeSafe<{ message: string }>("backup_create");
+                setBackupStatus(res.message || "Бэкап создан.");
+              } catch (e: any) {
+                setBackupStatus("Не удалось создать бэкап");
+                setError(String(e));
+              } finally {
+                setBackupBusy(false);
+              }
+            }}
+            disabled={backupBusy}
+            style={{ padding: 10, borderRadius: 10 }}
+          >
+            Создать бэкап
+          </button>
+          <button
+            onClick={async () => {
+              if (!window.confirm("Восстановить базу из последнего бэкапа? Потребуется перезапуск приложения.")) {
+                return;
+              }
+              try {
+                setRestoreBusy(true);
+                setBackupStatus("Подготавливаю восстановление...");
+                const res = await invokeSafe<{ message: string }>("backup_restore");
+                setBackupStatus(res.message || "Восстановление подготовлено. Перезапусти приложение.");
+              } catch (e: any) {
+                setBackupStatus("Не удалось подготовить восстановление");
+                setError(String(e));
+              } finally {
+                setRestoreBusy(false);
+              }
+            }}
+            disabled={restoreBusy}
+            style={{ padding: 10, borderRadius: 10, background: "#fef5e6", border: "1px solid #f2c185" }}
+          >
+            Восстановить
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                setOpenBackupBusy(true);
+                setBackupStatus("Открываю канал бэкапов...");
+                const res = await invokeSafe<{ message: string }>("backup_open_channel");
+                setBackupStatus(res.message || "Канал открыт.");
+              } catch (e: any) {
+                setBackupStatus("Не удалось открыть канал");
+                setError(String(e));
+              } finally {
+                setOpenBackupBusy(false);
+              }
+            }}
+            disabled={openBackupBusy}
+            style={{ padding: 10, borderRadius: 10 }}
+          >
+            Открыть канал
+          </button>
+          {backupStatus ? <div style={{ fontSize: 12, opacity: 0.7 }}>{backupStatus}</div> : null}
         </div>
       </div>
 

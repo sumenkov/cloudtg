@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use parking_lot::RwLock;
 use tauri::{AppHandle, Manager};
@@ -95,6 +96,9 @@ impl AppState {
   async fn init(&self, app: AppHandle) -> anyhow::Result<()> {
     let paths = Paths::detect()?.with_resource_dir(app.path().resource_dir().ok());
     paths.ensure_dirs()?;
+    if let Err(e) = apply_pending_restore(&paths) {
+      tracing::warn!(error = %e, "Не удалось применить подготовленное восстановление базы");
+    }
     tracing::info!(event = "init_paths", base_dir = %paths.base_dir.display(), "Пути приложения инициализированы");
 
     let db = Db::connect(paths.sqlite_path()).await?;
@@ -116,5 +120,44 @@ impl AppState {
     }
 
     Ok(())
+  }
+}
+
+fn apply_pending_restore(paths: &Paths) -> anyhow::Result<()> {
+  let pending = paths.pending_restore_path();
+  if !pending.exists() {
+    return Ok(());
+  }
+
+  let db_path = paths.sqlite_path();
+  let prev_path = paths.previous_db_path();
+
+  remove_sqlite_sidecars(&db_path);
+  remove_sqlite_sidecars(&pending);
+  remove_sqlite_sidecars(&prev_path);
+
+  if db_path.exists() {
+    if prev_path.exists() {
+      let _ = std::fs::remove_file(&prev_path);
+    }
+    std::fs::rename(&db_path, &prev_path)?;
+  }
+
+  std::fs::rename(&pending, &db_path)?;
+  remove_sqlite_sidecars(&prev_path);
+  tracing::info!(
+    event = "db_restore_applied",
+    db_path = %db_path.display(),
+    prev_path = %prev_path.display(),
+    "Применено восстановление базы"
+  );
+  Ok(())
+}
+
+fn remove_sqlite_sidecars(path: &Path) {
+  let base = path.to_string_lossy();
+  for suffix in ["-wal", "-shm", "-journal"] {
+    let candidate = PathBuf::from(format!("{base}{suffix}"));
+    let _ = std::fs::remove_file(candidate);
   }
 }

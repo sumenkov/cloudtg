@@ -9,6 +9,7 @@ pub struct MockTelegram {
   paths: Paths,
   _app: tauri::AppHandle,
   chat_id: Mutex<ChatId>,
+  backup_chat_id: Mutex<ChatId>,
   next_msg_id: Mutex<MessageId>,
   messages: Mutex<VecDeque<UploadedMessage>>,
   authed: Mutex<bool>
@@ -20,6 +21,7 @@ impl MockTelegram {
       paths,
       _app: app,
       chat_id: Mutex::new(777),
+      backup_chat_id: Mutex::new(888),
       next_msg_id: Mutex::new(1),
       messages: Mutex::new(VecDeque::new()),
       authed: Mutex::new(true)
@@ -59,6 +61,15 @@ impl TelegramService for MockTelegram {
 
   async fn storage_delete_channel(&self, _chat_id: ChatId) -> Result<(), TgError> {
     Ok(())
+  }
+
+  async fn backup_check_channel(&self, _chat_id: ChatId) -> Result<bool, TgError> {
+    Ok(*self.authed.lock())
+  }
+
+  async fn backup_get_or_create_channel(&self) -> Result<ChatId, TgError> {
+    if !*self.authed.lock() { return Err(TgError::AuthRequired); }
+    Ok(*self.backup_chat_id.lock())
   }
 
   async fn chat_history(&self, _chat_id: ChatId, _from_message_id: MessageId, _limit: i32)

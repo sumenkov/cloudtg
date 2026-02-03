@@ -143,6 +143,7 @@ enum TdlibCommand {
 
 const STORAGE_CHANNEL_TITLE: &str = "CloudTG";
 const STORAGE_CHANNEL_TITLE_LEGACY: &str = "CloudVault";
+const BACKUP_CHANNEL_TITLE: &str = "CloudTG Backups";
 const TDLIB_MANIFEST_NAME: &str = "tdlib-manifest.json";
 
 fn storage_channel_title() -> &'static str {
@@ -151,6 +152,10 @@ fn storage_channel_title() -> &'static str {
 
 fn storage_channel_title_legacy() -> &'static str {
   STORAGE_CHANNEL_TITLE_LEGACY
+}
+
+fn backup_channel_title() -> &'static str {
+  BACKUP_CHANNEL_TITLE
 }
 
 fn tdlib_session_name() -> String {
@@ -818,6 +823,83 @@ impl TdlibTelegram {
     Ok(fallback)
   }
 
+  async fn find_backup_channel(&self) -> Result<Option<ChatId>, TgError> {
+    let mut chat_ids: Vec<ChatId> = Vec::new();
+
+    if let Ok(res) = self
+      .request(json!({"@type":"searchChats","query":backup_channel_title(),"limit":20}), Duration::from_secs(10))
+      .await
+    {
+      if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
+        for id in list {
+          if let Some(v) = id.as_i64() {
+            if !chat_ids.contains(&v) {
+              chat_ids.push(v);
+            }
+          }
+        }
+      }
+    }
+
+    if chat_ids.is_empty() {
+      if let Ok(res) = self
+        .request(json!({"@type":"searchChatsOnServer","query":backup_channel_title(),"limit":20}), Duration::from_secs(10))
+        .await
+      {
+        if let Some(list) = res.get("chat_ids").and_then(|v| v.as_array()) {
+          for id in list {
+            if let Some(v) = id.as_i64() {
+              if !chat_ids.contains(&v) {
+                chat_ids.push(v);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    for chat_id in chat_ids {
+      let chat = self
+        .request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10))
+        .await?;
+      let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("");
+      let chat_type = chat.get("type").and_then(|v| v.as_object());
+      let is_channel = chat_type
+        .and_then(|t| t.get("is_channel"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+      let type_name = chat_type
+        .and_then(|t| t.get("@type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+      if type_name == "chatTypeSupergroup" && is_channel {
+        let supergroup_id = chat_type
+          .and_then(|t| t.get("supergroup_id"))
+          .and_then(|v| v.as_i64())
+          .unwrap_or(0);
+        if !self.is_supergroup_usable(supergroup_id).await? {
+          tracing::warn!(event = "backup_channel_unusable", chat_id = chat_id, "Канал бэкапов недоступен, пропускаю");
+          let _ = self
+            .request(
+              json!({"@type":"deleteChatHistory","chat_id":chat_id,"remove_from_chat_list":true,"revoke":true}),
+              Duration::from_secs(10)
+            )
+            .await;
+          let _ = self
+            .request(json!({"@type":"leaveChat","chat_id":chat_id}), Duration::from_secs(10))
+            .await;
+          continue;
+        }
+
+        if title == backup_channel_title() {
+          return Ok(Some(chat_id));
+        }
+      }
+    }
+
+    Ok(None)
+  }
+
   async fn create_storage_channel(&self) -> Result<ChatId, TgError> {
     let chat = self
       .request(
@@ -826,6 +908,25 @@ impl TdlibTelegram {
           "title": storage_channel_title(),
           "is_channel":true,
           "description":"Хранилище CloudTG"
+        }),
+        Duration::from_secs(20)
+      )
+      .await?;
+    let chat_id = chat
+      .get("id")
+      .and_then(|v| v.as_i64())
+      .ok_or_else(|| TgError::Other("TDLib не вернул chat_id".into()))?;
+    Ok(chat_id)
+  }
+
+  async fn create_backup_channel(&self) -> Result<ChatId, TgError> {
+    let chat = self
+      .request(
+        json!({
+          "@type":"createNewSupergroupChat",
+          "title": backup_channel_title(),
+          "is_channel":true,
+          "description":"Бэкапы CloudTG"
         }),
         Duration::from_secs(20)
       )
@@ -917,6 +1018,66 @@ impl TdlibTelegram {
 
     Ok(())
   }
+
+  async fn ensure_backup_channel_config(&self, chat_id: ChatId) -> Result<(), TgError> {
+    let chat = self
+      .request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10))
+      .await?;
+    let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    if title != backup_channel_title() {
+      let _ = self
+        .request(
+          json!({"@type":"setChatTitle","chat_id":chat_id,"title":backup_channel_title()}),
+          Duration::from_secs(10)
+        )
+        .await?;
+      tracing::info!(event = "backup_channel_title_updated", chat_id = chat_id, "Название канала обновлено");
+    }
+
+    if let Ok(icon_path) = self.ensure_icon_file() {
+      let path_str = icon_path.to_string_lossy().to_string();
+      let _ = self
+        .request(
+          json!({
+            "@type":"setChatPhoto",
+            "chat_id": chat_id,
+            "photo": {
+              "@type":"inputChatPhotoStatic",
+              "photo": { "@type":"inputFileLocal", "path": path_str }
+            }
+          }),
+          Duration::from_secs(20)
+        )
+        .await?;
+      tracing::info!(event = "backup_channel_photo_updated", chat_id = chat_id, "Иконка канала обновлена");
+    }
+
+    let _ = self
+      .request(
+        json!({
+          "@type":"setChatNotificationSettings",
+          "chat_id": chat_id,
+          "notification_settings": {
+            "@type":"chatNotificationSettings",
+            "use_default_mute_for": false,
+            "mute_for": 0,
+            "use_default_sound": true,
+            "sound_id": 0,
+            "use_default_show_preview": true,
+            "show_preview": true,
+            "use_default_disable_pinned_message_notifications": true,
+            "disable_pinned_message_notifications": false,
+            "use_default_disable_mention_notifications": true,
+            "disable_mention_notifications": false
+          }
+        }),
+        Duration::from_secs(10)
+      )
+      .await?;
+    tracing::info!(event = "backup_channel_notifications_enabled", chat_id = chat_id, "Уведомления канала включены");
+
+    Ok(())
+  }
 }
 
 #[async_trait::async_trait]
@@ -990,6 +1151,34 @@ impl TelegramService for TdlibTelegram {
     self.is_supergroup_usable(supergroup_id).await
   }
 
+  async fn backup_check_channel(&self, chat_id: ChatId) -> Result<bool, TgError> {
+    self.ensure_authorized().await?;
+    let chat = self
+      .request(json!({"@type":"getChat","chat_id":chat_id}), Duration::from_secs(10))
+      .await?;
+    let title = chat.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    if title != backup_channel_title() {
+      return Ok(false);
+    }
+    let chat_type = chat.get("type").and_then(|v| v.as_object());
+    let is_channel = chat_type
+      .and_then(|t| t.get("is_channel"))
+      .and_then(|v| v.as_bool())
+      .unwrap_or(false);
+    let type_name = chat_type
+      .and_then(|t| t.get("@type"))
+      .and_then(|v| v.as_str())
+      .unwrap_or("");
+    if type_name != "chatTypeSupergroup" || !is_channel {
+      return Ok(false);
+    }
+    let supergroup_id = chat_type
+      .and_then(|t| t.get("supergroup_id"))
+      .and_then(|v| v.as_i64())
+      .unwrap_or(0);
+    self.is_supergroup_usable(supergroup_id).await
+  }
+
   async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError> {
     self.ensure_authorized().await?;
     tracing::info!(event = "storage_get_or_create_channel", "Поиск канала хранения");
@@ -1006,6 +1195,27 @@ impl TelegramService for TdlibTelegram {
 
     if let Err(e) = self.ensure_storage_channel_config(chat_id).await {
       tracing::warn!(event = "storage_channel_config_failed", chat_id = chat_id, error = %e, "Не удалось обновить настройки канала");
+    }
+
+    Ok(chat_id)
+  }
+
+  async fn backup_get_or_create_channel(&self) -> Result<ChatId, TgError> {
+    self.ensure_authorized().await?;
+    tracing::info!(event = "backup_get_or_create_channel", "Поиск канала бэкапов");
+
+    let chat_id = if let Some(id) = self.find_backup_channel().await? {
+      tracing::info!(event = "backup_channel_found", chat_id = id, "Найден существующий канал бэкапов");
+      id
+    } else {
+      tracing::info!(event = "backup_channel_create", "Создаю канал бэкапов");
+      let id = self.create_backup_channel().await?;
+      tracing::info!(event = "backup_channel_created", chat_id = id, "Канал бэкапов создан");
+      id
+    };
+
+    if let Err(e) = self.ensure_backup_channel_config(chat_id).await {
+      tracing::warn!(event = "backup_channel_config_failed", chat_id = chat_id, error = %e, "Не удалось обновить настройки канала");
     }
 
     Ok(chat_id)
