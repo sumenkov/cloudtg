@@ -17,7 +17,74 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": "'self'",
+        "base-uri": "'self'",
+        "form-action": "'self'",
+        "frame-ancestors": "'none'",
+        "object-src": "'none'",
+        "font-src": [
+          "'self'",
+          "data:"
+        ],
+        "img-src": [
+          "'self'",
+          "asset:",
+          "data:",
+          "blob:"
+        ],
+        "media-src": [
+          "'self'",
+          "asset:",
+          "data:",
+          "blob:"
+        ],
+        "style-src": [
+          "'self'",
+          "'unsafe-inline'"
+        ],
+        "connect-src": [
+          "'self'",
+          "ipc:",
+          "http://ipc.localhost"
+        ]
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "base-uri": "'self'",
+        "form-action": "'self'",
+        "frame-ancestors": "'none'",
+        "object-src": "'none'",
+        "font-src": [
+          "'self'",
+          "data:"
+        ],
+        "img-src": [
+          "'self'",
+          "asset:",
+          "data:",
+          "blob:"
+        ],
+        "media-src": [
+          "'self'",
+          "asset:",
+          "data:",
+          "blob:"
+        ],
+        "style-src": [
+          "'self'",
+          "'unsafe-inline'"
+        ],
+        "connect-src": [
+          "'self'",
+          "ipc:",
+          "http://ipc.localhost",
+          "http://localhost:1420",
+          "ws://localhost:1420",
+          "http://127.0.0.1:1420",
+          "ws://127.0.0.1:1420"
+        ]
+      },
       "capabilities": [
         "main"
       ]

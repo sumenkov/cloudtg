@@ -32,13 +32,27 @@ export default function App() {
     tgSync.total && tgSync.total > 0 ? Math.max(0, Math.min(100, Math.floor((tgSync.processed / tgSync.total) * 100))) : null;
 
   useEffect(() => {
+    let disposed = false;
     const unlisteners: Array<() => void> = [];
+    const addListener = async <T,>(event: string, handler: (event: { payload: T }) => Promise<void>) => {
+      const unlisten = await listenSafe<T>(event, handler as any);
+      // Эффект может размонтироваться до завершения async-подписки (например, в React.StrictMode).
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlisteners.push(unlisten);
+    };
 
     (async () => {
       try {
         const state = await refreshAuth();
+        if (disposed) return;
         await refreshSettings();
+        if (disposed) return;
         await refreshTree();
+        if (disposed) return;
+
         if (state === "ready" && !syncStartedRef.current) {
           syncStartedRef.current = true;
           try {
@@ -46,75 +60,74 @@ export default function App() {
             await invokeSafe("tg_reconcile_recent", { limit: 100 });
             await refreshTree();
           } catch (e: any) {
-            setError(String(e));
+            if (!disposed) {
+              setError(String(e));
+            }
           }
         }
 
-        unlisteners.push(
-          await listenSafe<{ state: string }>("auth_state_changed", async (event) => {
-            setAuth(event.payload.state);
-            if (event.payload.state === "ready") {
-              await refreshTree();
-              if (!syncStartedRef.current) {
-                syncStartedRef.current = true;
-                try {
-                  await invokeSafe("tg_sync_storage");
-                  await invokeSafe("tg_reconcile_recent", { limit: 100 });
-                  await refreshTree();
-                } catch (e: any) {
+        await addListener<{ state: string }>("auth_state_changed", async (event) => {
+          if (disposed) return;
+          setAuth(event.payload.state);
+          if (event.payload.state === "ready") {
+            await refreshTree();
+            if (!syncStartedRef.current) {
+              syncStartedRef.current = true;
+              try {
+                await invokeSafe("tg_sync_storage");
+                await invokeSafe("tg_reconcile_recent", { limit: 100 });
+                await refreshTree();
+              } catch (e: any) {
+                if (!disposed) {
                   setError(String(e));
                 }
               }
             }
-          })
-        );
+          }
+        });
 
-        unlisteners.push(
-          await listenSafe<{ state: string; message: string; detail?: string | null }>("tdlib_build_status", async (event) => {
-            if (event.payload.state === "start") {
-              clearTdlibLogs();
-            }
-            setTdlibBuild({
-              state: event.payload.state ?? null,
-              message: event.payload.message ?? null,
-              detail: event.payload.detail ?? null,
-              progress: null
-            });
-          })
-        );
+        await addListener<{ state: string; message: string; detail?: string | null }>("tdlib_build_status", async (event) => {
+          if (disposed) return;
+          if (event.payload.state === "start") {
+            clearTdlibLogs();
+          }
+          setTdlibBuild({
+            state: event.payload.state ?? null,
+            message: event.payload.message ?? null,
+            detail: event.payload.detail ?? null,
+            progress: null
+          });
+        });
 
-        unlisteners.push(
-          await listenSafe<{ stream: "stdout" | "stderr"; line: string }>("tdlib_build_log", async (event) => {
-            touchTdlibBuildOnLog();
-            pushTdlibLog(event.payload.stream, event.payload.line);
-          })
-        );
+        await addListener<{ stream: "stdout" | "stderr"; line: string }>("tdlib_build_log", async (event) => {
+          if (disposed) return;
+          touchTdlibBuildOnLog();
+          pushTdlibLog(event.payload.stream, event.payload.line);
+        });
 
-        unlisteners.push(
-          await listenSafe<{ state: string; message: string; processed: number; total: number | null }>(
-            "tg_sync_status",
-            async (event) => {
-              setTgSync({
-                state: event.payload.state ?? null,
-                message: event.payload.message ?? null,
-                processed: event.payload.processed ?? 0,
-                total: event.payload.total ?? null
-              });
-            }
-          )
-        );
+        await addListener<{ state: string; message: string; processed: number; total: number | null }>("tg_sync_status", async (event) => {
+          if (disposed) return;
+          setTgSync({
+            state: event.payload.state ?? null,
+            message: event.payload.message ?? null,
+            processed: event.payload.processed ?? 0,
+            total: event.payload.total ?? null
+          });
+        });
 
-        unlisteners.push(
-          await listenSafe("tree_updated", async () => {
-            await refreshTree();
-          })
-        );
+        await addListener<unknown>("tree_updated", async () => {
+          if (disposed) return;
+          await refreshTree();
+        });
       } catch (e: any) {
-        setError(String(e));
+        if (!disposed) {
+          setError(String(e));
+        }
       }
     })();
 
     return () => {
+      disposed = true;
       unlisteners.forEach((fn) => fn());
     };
   }, [

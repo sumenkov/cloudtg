@@ -3,6 +3,10 @@ import { useAppStore, DirNode, ChatItem, FileItem } from "../store/app";
 import { listenSafe } from "../tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createDragDropHandler, createTreeUpdatedHandler, normalizeUploadPaths } from "./fileManagerListeners";
+import { TreePanel } from "./file-manager/TreePanel";
+import { SearchPanel } from "./file-manager/SearchPanel";
+import { SharePanel } from "./file-manager/SharePanel";
+import { FileList } from "./file-manager/FileList";
 
 function containsNode(root: DirNode, id: string): boolean {
   if (root.id === id) return true;
@@ -39,110 +43,6 @@ function flattenTree(node: DirNode, depth: number, out: FlatNode[], exclude: Set
   for (const c of node.children) {
     flattenTree(c, depth + 1, out, exclude);
   }
-}
-
-type TreeRowProps = {
-  node: DirNode;
-  depth: number;
-  selectedId: string | null;
-  collapsed: Set<string>;
-  onSelect: (id: string) => void;
-  onToggle: (id: string) => void;
-};
-
-function TreeRow({ node, depth, selectedId, collapsed, onSelect, onToggle }: TreeRowProps) {
-  const hasChildren = node.children.length > 0;
-  const isCollapsed = collapsed.has(node.id);
-  const isRoot = node.id === "ROOT";
-  const label = isRoot ? "Корень" : node.name;
-  const marker = hasChildren ? (isCollapsed ? "▶" : "▼") : "";
-
-  return (
-    <div>
-      <div
-        role="treeitem"
-        aria-expanded={hasChildren ? !isCollapsed : undefined}
-        tabIndex={0}
-        onClick={() => onSelect(node.id)}
-        onFocus={() => onSelect(node.id)}
-        onDoubleClick={() => hasChildren && onToggle(node.id)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && hasChildren) {
-            e.preventDefault();
-            onToggle(node.id);
-          }
-        }}
-        style={{
-          padding: "6px 8px",
-          borderRadius: 10,
-          cursor: "pointer",
-          background: selectedId === node.id ? "#f3f3f3" : "transparent",
-          marginLeft: depth * 16,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          userSelect: "none"
-        }}
-      >
-        <button
-          type="button"
-          aria-label={hasChildren ? "Свернуть или развернуть папку" : "Нет подпапок"}
-          disabled={!hasChildren}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (hasChildren) onToggle(node.id);
-          }}
-          style={{
-            width: 20,
-            height: 20,
-            borderRadius: 6,
-            border: "1px solid #ccc",
-            background: "#fff",
-            color: "#333",
-            fontSize: 12,
-            lineHeight: "16px",
-            cursor: hasChildren ? "pointer" : "default",
-            opacity: hasChildren ? 1 : 0.3
-          }}
-        >
-          {marker || "•"}
-        </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
-          <span style={{ fontWeight: isRoot ? 700 : 500 }}>{label}</span>
-          {!isRoot && node.is_broken ? (
-            <span
-              style={{
-                fontSize: 11,
-                color: "#b00020",
-                border: "1px solid #f2b8b8",
-                background: "#fff3f3",
-                borderRadius: 999,
-                padding: "1px 6px"
-              }}
-            >
-              битая
-            </span>
-          ) : null}
-        </div>
-        {!isRoot && <span style={{ opacity: 0.5, fontSize: 12 }}>{node.id.slice(0, 6)}</span>}
-      </div>
-      {hasChildren && !isCollapsed && (
-        <div role="group">
-          {node.children.map((child) => (
-            <TreeRow
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              selectedId={selectedId}
-              collapsed={collapsed}
-              onSelect={onSelect}
-              onToggle={onToggle}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export function FileManager({ tree }: { tree: DirNode | null }) {
@@ -409,26 +309,13 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 16 }}>
-      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
-        <b>Дерево директорий</b>
-        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
-          Двойной клик или Enter — свернуть/развернуть.
-        </div>
-        <div style={{ marginTop: 10, maxHeight: 500, overflow: "auto" }}>
-          {tree ? (
-            <TreeRow
-              node={tree}
-              depth={0}
-              selectedId={parentId}
-              collapsed={collapsed}
-              onSelect={setParentId}
-              onToggle={toggleCollapse}
-            />
-          ) : (
-            <div style={{ opacity: 0.6 }}>Дерево пока не загружено.</div>
-          )}
-        </div>
-      </div>
+      <TreePanel
+        tree={tree}
+        selectedId={parentId}
+        collapsed={collapsed}
+        onSelect={setParentId}
+        onToggle={toggleCollapse}
+      />
 
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
         <b>Операции</b>
@@ -621,76 +508,31 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                 </div>
               </div>
 
-                <div style={{ marginTop: 10, padding: 12, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
-                  <b>Поиск</b>
-                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 160px", gap: 8 }}>
-                  <input
-                    value={searchName}
-                    onChange={(e) => setSearchName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        runSearch();
-                      }
-                    }}
-                    placeholder="Имя"
-                    style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
-                  />
-                  <input
-                    value={searchType}
-                    onChange={(e) => setSearchType(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        runSearch();
-                      }
-                    }}
-                    placeholder="Тип (например pdf)"
-                    style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
-                  />
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.8 }}>
-                    <input
-                      type="checkbox"
-                      checked={searchAll}
-                      onChange={(e) => setSearchAll(e.target.checked)}
-                    />
-                    Во всех папках
-                  </label>
-                </div>
-                <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
-                  <button
-                    onClick={runSearch}
-                    disabled={searchBusy}
-                    style={{ padding: "6px 10px", borderRadius: 8 }}
-                  >
-                    Найти
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!selectedNode) return;
-                      setSearchName("");
-                      setSearchType("");
-                      setSearchAll(false);
-                      setSearchActive(false);
-                      setSelectedFiles(new Set());
-                      try {
-                        await refreshFiles(selectedNode.id);
-                      } catch (e: any) {
-                        setError(String(e));
-                      }
-                    }}
-                    disabled={searchBusy}
-                    style={{ padding: "6px 10px", borderRadius: 8, opacity: searchActive ? 1 : 0.7 }}
-                  >
-                    Сброс
-                  </button>
-                  {searchActive ? (
-                    <div style={{ fontSize: 12, opacity: 0.6 }}>
-                      Найдено: {files.length}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
+              <SearchPanel
+                searchName={searchName}
+                searchType={searchType}
+                searchAll={searchAll}
+                searchBusy={searchBusy}
+                searchActive={searchActive}
+                foundCount={files.length}
+                onSearchNameChange={setSearchName}
+                onSearchTypeChange={setSearchType}
+                onSearchAllChange={setSearchAll}
+                onRunSearch={runSearch}
+                onReset={async () => {
+                  if (!selectedNode) return;
+                  setSearchName("");
+                  setSearchType("");
+                  setSearchAll(false);
+                  setSearchActive(false);
+                  setSelectedFiles(new Set());
+                  try {
+                    await refreshFiles(selectedNode.id);
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+              />
 
 
               <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
@@ -761,301 +603,139 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                 </div>
               ) : null}
 
-              {shareFile ? (
-                <div style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
-                  <b>Поделиться файлом</b>
-                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-                    Файл: {shareFile.name}
-                  </div>
-                  <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 160px", gap: 8 }}>
-                    <input
-                      value={shareQuery}
-                      onChange={(e) => setShareQuery(e.target.value)}
-                      placeholder="Название чата или @username"
-                      style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
-                    />
-                    <button
-                      onClick={async () => {
-                        const q = shareQuery.trim();
-                        if (!q) return;
-                        try {
-                          setShareBusy(true);
-                          const res = await searchChats(q);
-                          setShareResults(res);
-                        } catch (e: any) {
-                          setError(String(e));
-                        } finally {
-                          setShareBusy(false);
-                        }
-                      }}
-                      disabled={shareBusy || !shareQuery.trim()}
-                      style={{ padding: 10, borderRadius: 10 }}
-                    >
-                      Найти
-                    </button>
-                  </div>
-                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button
-                      onClick={() => {
-                        setShareFile(null);
-                        setShareQuery("");
-                        setShareResults([]);
-                      }}
-                      style={{ padding: "6px 10px", borderRadius: 8, opacity: 0.8 }}
-                    >
-                      Закрыть
-                    </button>
-                    <button
-                      onClick={async () => {
-                        try {
-                          setShareBusy(true);
-                          const recent = await getRecentChats();
-                          setShareResults(recent);
-                        } catch (e: any) {
-                          setError(String(e));
-                        } finally {
-                          setShareBusy(false);
-                        }
-                      }}
-                      disabled={shareBusy}
-                      style={{ padding: "6px 10px", borderRadius: 8 }}
-                    >
-                      Недавние чаты
-                    </button>
-                  </div>
-                  <div style={{ marginTop: 8 }}>
-                    {shareResults.length === 0 ? (
-                      <div style={{ fontSize: 12, opacity: 0.6 }}>
-                        Введи запрос и нажми «Найти» или выбери из недавних.
-                      </div>
-                    ) : (
-                      <div style={{ display: "grid", gap: 6 }}>
-                        {shareResults.map((chat) => (
-                          <div
-                            key={chat.id}
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "1fr 140px",
-                              gap: 10,
-                              alignItems: "center",
-                              padding: "8px 10px",
-                              border: "1px solid #eee",
-                              borderRadius: 8
-                            }}
-                          >
-                            <div>
-                              <div style={{ fontWeight: 500 }}>{chat.title}</div>
-                              <div style={{ fontSize: 12, opacity: 0.6 }}>
-                                {chat.kind}
-                                {chat.username ? ` • @${chat.username}` : ""}
-                              </div>
-                            </div>
-                            <button
-                              onClick={async () => {
-                                if (!shareFile) return;
-                                try {
-                                  setShareBusy(true);
-                                  const msg = await shareFileToChat(shareFile.id, chat.id);
-                                  setShareStatus(msg);
-                                  setShareFile(null);
-                                  setShareResults([]);
-                                  setShareQuery("");
-                                } catch (e: any) {
-                                  setError(String(e));
-                                } finally {
-                                  setShareBusy(false);
-                                }
-                              }}
-                              disabled={shareBusy}
-                              style={{ padding: "6px 10px", borderRadius: 8 }}
-                            >
-                              Отправить
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : null}
+              <SharePanel
+                shareFile={shareFile}
+                shareQuery={shareQuery}
+                shareResults={shareResults}
+                shareBusy={shareBusy}
+                onShareQueryChange={setShareQuery}
+                onClose={() => {
+                  setShareFile(null);
+                  setShareQuery("");
+                  setShareResults([]);
+                }}
+                onSearch={async () => {
+                  const query = shareQuery.trim();
+                  if (!query) return;
+                  try {
+                    setShareBusy(true);
+                    const res = await searchChats(query);
+                    setShareResults(res);
+                  } catch (e: any) {
+                    setError(String(e));
+                  } finally {
+                    setShareBusy(false);
+                  }
+                }}
+                onLoadRecent={async () => {
+                  try {
+                    setShareBusy(true);
+                    const recent = await getRecentChats();
+                    setShareResults(recent);
+                  } catch (e: any) {
+                    setError(String(e));
+                  } finally {
+                    setShareBusy(false);
+                  }
+                }}
+                onSend={async (chatId) => {
+                  if (!shareFile) return;
+                  try {
+                    setShareBusy(true);
+                    const msg = await shareFileToChat(shareFile.id, chatId);
+                    setShareStatus(msg);
+                    setShareFile(null);
+                    setShareResults([]);
+                    setShareQuery("");
+                  } catch (e: any) {
+                    setError(String(e));
+                  } finally {
+                    setShareBusy(false);
+                  }
+                }}
+              />
 
-              <div style={{ marginTop: 12, border: "1px solid #eee", borderRadius: 10, overflow: "hidden" }}>
-                {files.length === 0 ? (
-                  <div style={{ padding: 12, fontSize: 12, opacity: 0.6 }}>Файлов пока нет.</div>
-                ) : (
-                  <div>
-                    {files.map((f) => {
-                      const checked = selectedFiles.has(f.id);
-                      const displaySize = f.is_downloaded ? (f.local_size ?? 0) : 0;
-                      return (
-                        <div
-                          key={f.id}
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "24px 1fr 120px 120px 420px",
-                            gap: 8,
-                            alignItems: "center",
-                            padding: "8px 10px",
-                            borderTop: "1px solid #f0f0f0"
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => {
-                              setSelectedFiles((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(f.id)) next.delete(f.id);
-                                else next.add(f.id);
-                                return next;
-                              });
-                            }}
-                          />
-                          <div style={{ display: "flex", flexDirection: "column" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <span style={{ fontWeight: 500 }}>{f.name}</span>
-                              {f.is_broken ? (
-                                <span
-                                  style={{
-                                    fontSize: 11,
-                                    color: "#b00020",
-                                    border: "1px solid #f2b8b8",
-                                    background: "#fff3f3",
-                                    borderRadius: 999,
-                                    padding: "1px 6px"
-                                  }}
-                                >
-                                  битый
-                                </span>
-                              ) : null}
-                            </div>
-                            <span style={{ fontSize: 11, opacity: 0.6 }}>#{f.hash}</span>
-                          </div>
-                          <div style={{ fontSize: 12, opacity: 0.7 }}>{formatBytes(displaySize)}</div>
-                          <div style={{ fontSize: 12, opacity: 0.5 }}>{f.id.slice(0, 6)}</div>
-                          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-                            <button
-                              onClick={async () => {
-                                try {
-                                  let overwrite = false;
-                                  if (f.is_downloaded) {
-                                    const ok = window.confirm("Файл уже скачан. Перезаписать локальную копию?");
-                                    if (!ok) return;
-                                    overwrite = true;
-                                  }
-                                  await downloadFile(f.id, overwrite);
-                                  await reloadFiles();
-                                } catch (e: any) {
-                                  setError(String(e));
-                                }
-                              }}
-                              style={{ padding: "6px 10px", borderRadius: 8 }}
-                            >
-                              Скачать
-                            </button>
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await openFile(f.id);
-                                  await reloadFiles();
-                                } catch (e: any) {
-                                  setError(String(e));
-                                }
-                              }}
-                              style={{ padding: "6px 10px", borderRadius: 8 }}
-                            >
-                              Открыть
-                            </button>
-                            {f.is_downloaded ? (
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    await openFileFolder(f.id);
-                                  } catch (e: any) {
-                                    setError(String(e));
-                                  }
-                                }}
-                                style={{ padding: "6px 10px", borderRadius: 8 }}
-                              >
-                                Открыть папку
-                              </button>
-                            ) : null}
-                            <button
-                              onClick={() => {
-                                setShareFile(f);
-                                setShareStatus(null);
-                              }}
-                              style={{ padding: "6px 10px", borderRadius: 8 }}
-                            >
-                              Поделиться
-                            </button>
-                            {f.is_broken ? (
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    let res = await repairFile(f.id);
-                                    if (!res.ok && res.code === REPAIR_NEED_FILE) {
-                                      const paths = await pickFiles();
-                                      if (!paths || paths.length === 0) return;
-                                      res = await repairFile(f.id, paths[0]);
-                                    }
-                                    if (!res.ok) {
-                                      setError(res.message);
-                                      return;
-                                    }
-                                    await reloadFiles();
-                                  } catch (e: any) {
-                                    setError(String(e));
-                                  }
-                                }}
-                                style={{ padding: "6px 10px", borderRadius: 8 }}
-                              >
-                                Восстановить
-                              </button>
-                            ) : null}
-                            <button
-                              onClick={async () => {
-                                const ok = window.confirm("Удалить файл?");
-                                if (!ok) return;
-                                try {
-                                  await deleteFiles([f.id]);
-                                  if (selectedNode) await reloadFiles();
-                                  setSelectedFiles((prev) => {
-                                    const next = new Set(prev);
-                                    next.delete(f.id);
-                                    return next;
-                                  });
-                                } catch (e: any) {
-                                  setError(String(e));
-                                }
-                              }}
-                              style={{ padding: "6px 10px", borderRadius: 8, background: "#fee", border: "1px solid #f99" }}
-                            >
-                              Удалить
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              <FileList
+                files={files}
+                selectedFiles={selectedFiles}
+                onToggleSelect={(fileId) => {
+                  setSelectedFiles((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(fileId)) next.delete(fileId);
+                    else next.add(fileId);
+                    return next;
+                  });
+                }}
+                onDownload={async (file) => {
+                  try {
+                    let overwrite = false;
+                    if (file.is_downloaded) {
+                      const ok = window.confirm("Файл уже скачан. Перезаписать локальную копию?");
+                      if (!ok) return;
+                      overwrite = true;
+                    }
+                    await downloadFile(file.id, overwrite);
+                    await reloadFiles();
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+                onOpen={async (file) => {
+                  try {
+                    await openFile(file.id);
+                    await reloadFiles();
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+                onOpenFolder={async (file) => {
+                  try {
+                    await openFileFolder(file.id);
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+                onShare={(file) => {
+                  setShareFile(file);
+                  setShareStatus(null);
+                }}
+                onRepair={async (file) => {
+                  try {
+                    let res = await repairFile(file.id);
+                    if (!res.ok && res.code === REPAIR_NEED_FILE) {
+                      const paths = await pickFiles();
+                      if (!paths || paths.length === 0) return;
+                      res = await repairFile(file.id, paths[0]);
+                    }
+                    if (!res.ok) {
+                      setError(res.message);
+                      return;
+                    }
+                    await reloadFiles();
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+                onDelete={async (file) => {
+                  const ok = window.confirm("Удалить файл?");
+                  if (!ok) return;
+                  try {
+                    await deleteFiles([file.id]);
+                    if (selectedNode) await reloadFiles();
+                    setSelectedFiles((prev) => {
+                      const next = new Set(prev);
+                      next.delete(file.id);
+                      return next;
+                    });
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+              />
             </>
           )}
         </div>
       </div>
     </div>
   );
-}
-
-function formatBytes(size: number): string {
-  if (!Number.isFinite(size)) return "0 Б";
-  const units = ["Б", "КБ", "МБ", "ГБ"];
-  let value = size;
-  let idx = 0;
-  while (value >= 1024 && idx < units.length - 1) {
-    value /= 1024;
-    idx += 1;
-  }
-  return `${value.toFixed(value < 10 && idx > 0 ? 1 : 0)} ${units[idx]}`;
 }

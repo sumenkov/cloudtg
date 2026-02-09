@@ -107,7 +107,7 @@ pub fn make_telegram_service(
 
   #[cfg(all(not(feature = "mock_telegram"), feature = "tdlib"))]
   {
-    return Ok(Arc::new(tdlib::TdlibTelegram::new(paths, app, tg_settings, tdlib_path)?));
+    Ok(Arc::new(tdlib::TdlibTelegram::new(paths, app, tg_settings, tdlib_path)?))
   }
 
   #[cfg(all(not(feature = "mock_telegram"), not(feature = "tdlib")))]

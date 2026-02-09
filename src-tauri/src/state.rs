@@ -123,6 +123,12 @@ impl AppState {
   }
 }
 
+impl Default for AppState {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 fn apply_pending_restore(paths: &Paths) -> anyhow::Result<()> {
   let pending = paths.pending_restore_path();
   if !pending.exists() {
