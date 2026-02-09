@@ -7,6 +7,7 @@ import { TreePanel } from "./file-manager/TreePanel";
 import { SearchPanel } from "./file-manager/SearchPanel";
 import { SharePanel } from "./file-manager/SharePanel";
 import { FileList } from "./file-manager/FileList";
+import { Hint } from "./common/Hint";
 import { handleDownloadAction, handleOpenAction, handleOpenFolderAction } from "./file-manager/fileActions";
 
 function containsNode(root: DirNode, id: string): boolean {
@@ -34,6 +35,7 @@ function collectIds(node: DirNode, out: Set<string>) {
 const REPAIR_NEED_FILE = "REPAIR_NEED_FILE";
 
 type FlatNode = { id: string; label: string };
+type MainTab = "files" | "folders" | "search" | "service";
 
 function flattenTree(node: DirNode, depth: number, out: FlatNode[], exclude: Set<string>) {
   if (!exclude.has(node.id)) {
@@ -88,6 +90,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const [searchActive, setSearchActive] = useState(false);
   const [searchBusy, setSearchBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [activeTab, setActiveTab] = useState<MainTab>("files");
   const selectedNodeRef = useRef<DirNode | null>(null);
   const isRootSelectedRef = useRef<boolean>(false);
   const reloadFilesRef = useRef<() => Promise<void>>(async () => {});
@@ -148,6 +151,20 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     }
   }, [selectedNode, searchActive, runSearch, refreshFiles]);
 
+  const resetSearch = useCallback(async () => {
+    if (!selectedNode) return;
+    setSearchName("");
+    setSearchType("");
+    setSearchAll(false);
+    setSearchActive(false);
+    setSelectedFiles(new Set());
+    try {
+      await refreshFiles(selectedNode.id);
+    } catch (e: any) {
+      setError(String(e));
+    }
+  }, [selectedNode, refreshFiles, setError]);
+
   useEffect(() => {
     if (!selectedNode) {
       setRenameValue("");
@@ -205,6 +222,12 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
 
   const isRootSelected = selectedNode?.id === "ROOT";
   const canUseFiles = Boolean(selectedNode && !isRootSelected);
+
+  useEffect(() => {
+    if (!canUseFiles && ["files", "search"].includes(activeTab)) {
+      setActiveTab("folders");
+    }
+  }, [canUseFiles, activeTab]);
 
   selectedNodeRef.current = selectedNode;
   isRootSelectedRef.current = isRootSelected;
@@ -308,6 +331,119 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     []
   );
 
+  const tabItems: Array<{ id: MainTab; label: string; title: string; disabled: boolean }> = [
+    { id: "files", label: "Файлы", title: "Список файлов и основные действия", disabled: !canUseFiles },
+    { id: "folders", label: "Папки", title: "Создание, переименование и перемещение папок", disabled: false },
+    { id: "search", label: "Поиск", title: "Поиск в текущей или во всех папках", disabled: !canUseFiles },
+    { id: "service", label: "Сервис", title: "Восстановление и служебные операции", disabled: false }
+  ];
+
+  const onFileToggleSelect = (fileId: string) => {
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(fileId)) next.delete(fileId);
+      else next.add(fileId);
+      return next;
+    });
+  };
+
+  const onFileDownload = async (file: FileItem) => {
+    await handleDownloadAction({
+      file,
+      confirm: (message) => window.confirm(message),
+      downloadFile,
+      reloadFiles
+    });
+  };
+
+  const onFileOpen = async (file: FileItem) => {
+    await handleOpenAction({
+      file,
+      openFile,
+      reloadFiles
+    });
+  };
+
+  const onFileOpenFolder = async (file: FileItem) => {
+    await handleOpenFolderAction({
+      file,
+      openFileFolder
+    });
+  };
+
+  const onFileRepair = async (file: FileItem) => {
+    let res = await repairFile(file.id);
+    if (!res.ok && res.code === REPAIR_NEED_FILE) {
+      const paths = await pickFiles();
+      if (!paths || paths.length === 0) return;
+      res = await repairFile(file.id, paths[0]);
+    }
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    await reloadFiles();
+  };
+
+  const onFileDelete = async (file: FileItem) => {
+    const ok = window.confirm("Удалить файл?");
+    if (!ok) return;
+    await deleteFiles([file.id]);
+    await reloadFiles();
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      next.delete(file.id);
+      return next;
+    });
+  };
+
+  const fileList = (
+    <FileList
+      files={files}
+      selectedFiles={selectedFiles}
+      onToggleSelect={onFileToggleSelect}
+      onDownload={async (file) => {
+        try {
+          await onFileDownload(file);
+        } catch (e: any) {
+          setError(String(e));
+        }
+      }}
+      onOpen={async (file) => {
+        try {
+          await onFileOpen(file);
+        } catch (e: any) {
+          setError(String(e));
+        }
+      }}
+      onOpenFolder={async (file) => {
+        try {
+          await onFileOpenFolder(file);
+        } catch (e: any) {
+          setError(String(e));
+        }
+      }}
+      onShare={(file) => {
+        setShareFile(file);
+        setShareStatus(null);
+      }}
+      onRepair={async (file) => {
+        try {
+          await onFileRepair(file);
+        } catch (e: any) {
+          setError(String(e));
+        }
+      }}
+      onDelete={async (file) => {
+        try {
+          await onFileDelete(file);
+        } catch (e: any) {
+          setError(String(e));
+        }
+      }}
+    />
+  );
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 16 }}>
       <TreePanel
@@ -319,234 +455,117 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       />
 
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
-        <b>Операции</b>
-        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Новая папка..."
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
-          />
-          <button
-            onClick={async () => {
-              if (!name.trim()) return;
-              try {
-                await createDir(parentId === "ROOT" ? null : parentId, name.trim());
-                setName("");
-              } catch (e: any) {
-                setError(String(e));
-              }
-            }}
-            style={{ padding: 10, borderRadius: 10 }}
-          >
-            Создать папку
-          </button>
-        </div>
-
-        <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
-          <b>Переименование</b>
-          <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
-            <input
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              placeholder="Новое имя..."
-              disabled={!selectedNode || isRootSelected}
-              style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
-            />
-            <button
-              onClick={async () => {
-                if (!selectedNode || isRootSelected) return;
-                if (!renameValue.trim()) return;
-                try {
-                  await renameDir(selectedNode.id, renameValue.trim());
-                } catch (e: any) {
-                  setError(String(e));
-                }
-              }}
-              disabled={!selectedNode || isRootSelected}
-              style={{ padding: 10, borderRadius: 10 }}
-            >
-              Переименовать
-            </button>
-          </div>
-        </div>
-
-        <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
-          <b>Перемещение директории</b>
-          <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
-            <select
-              value={moveParentId}
-              onChange={(e) => setMoveParentId(e.target.value)}
-              disabled={!selectedNode || isRootSelected || moveOptions.length === 0}
-              style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", background: "#fff" }}
-            >
-              {moveOptions.map((opt) => (
-                <option key={opt.id} value={opt.id}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={async () => {
-                if (!selectedNode || isRootSelected) return;
-                const target = moveParentId === "ROOT" ? null : moveParentId;
-                try {
-                  await moveDir(selectedNode.id, target);
-                } catch (e: any) {
-                  setError(String(e));
-                }
-              }}
-              disabled={!selectedNode || isRootSelected || moveOptions.length === 0}
-              style={{ padding: 10, borderRadius: 10 }}
-            >
-              Переместить
-            </button>
-          </div>
-        </div>
-
-        <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
-          <b>Удаление</b>
-          <div style={{ marginTop: 8 }}>
-            <button
-              onClick={async () => {
-                if (!selectedNode || isRootSelected) return;
-                const ok = window.confirm("Удалить папку? Действие нельзя отменить.");
-                if (!ok) return;
-                try {
-                  await deleteDir(selectedNode.id);
-                  setParentId("ROOT");
-                } catch (e: any) {
-                  setError(String(e));
-                }
-              }}
-              disabled={!selectedNode || isRootSelected}
-              style={{ padding: 10, borderRadius: 10, background: "#fee", border: "1px solid #f99" }}
-            >
-              Удалить папку
-            </button>
-            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
-              Удалять можно только пустые папки.
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap"
+          }}
+        >
+          <div>
+            <b>{selectedNode ? `Текущая папка: ${selectedNode.id === "ROOT" ? "Корень" : selectedNode.name}` : "Операции"}</b>
+            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.65 }}>
+              Выбери вкладку по сценарию: файлы, папки, поиск и сервис.
             </div>
           </div>
+          <div style={{ fontSize: 12, opacity: 0.65 }}>Файлов в текущем списке: {files.length}</div>
         </div>
 
-        {selectedNode && !isRootSelected && selectedNode.is_broken ? (
-          <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
-            <b>Восстановление</b>
-            <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {tabItems.map((tab) => {
+            const active = tab.id === activeTab;
+            return (
               <button
-                onClick={async () => {
-                  try {
-                    const res = await repairDir(selectedNode.id);
-                    if (!res.ok) {
-                      setError(res.message);
-                    }
-                  } catch (e: any) {
-                    setError(String(e));
-                  }
+                key={tab.id}
+                title={tab.title}
+                onClick={() => setActiveTab(tab.id)}
+                disabled={tab.disabled}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: active ? "1px solid #8eb5ff" : "1px solid #d8d8d8",
+                  background: active ? "#e9f1ff" : "#fff",
+                  opacity: tab.disabled ? 0.45 : 1,
+                  cursor: tab.disabled ? "not-allowed" : "pointer"
                 }}
-                style={{ padding: 10, borderRadius: 10 }}
               >
-                Восстановить папку
+                {tab.label}
               </button>
-              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
-                Пересоздает/обновляет сообщение папки в канале хранения.
-              </div>
-            </div>
-          </div>
-        ) : null}
+            );
+          })}
+        </div>
 
-        <div style={{ marginTop: 16, borderTop: "1px solid #eee", paddingTop: 12 }}>
-          <b>Файлы</b>
-          {!canUseFiles ? (
-            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.6 }}>
-              Выбери папку в дереве, чтобы управлять файлами.
-            </div>
-          ) : (
-            <>
-              <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "center" }}>
-                <div
-                  style={{
-                    flex: 1,
-                    border: "1px dashed #bbb",
-                    borderRadius: 12,
-                    padding: "10px 12px",
-                    background: dropActive ? "#f0f7ff" : "#fafafa",
-                    color: "#333"
-                  }}
-                >
-                  {dropActive
-                    ? "Отпускай файлы, чтобы загрузить"
-                    : "Перетащи файлы сюда для загрузки"}
-                </div>
+        {activeTab === "folders" ? (
+          <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
+            <div style={{ padding: 12, border: "1px solid #eee", borderRadius: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <b>Создать папку</b>
+                <Hint text="Новая папка создается внутри выбранной в дереве папки." />
+              </div>
+              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Новая папка..."
+                  style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                />
                 <button
                   onClick={async () => {
-                    if (!selectedNode || isRootSelected || uploadInProgressRef.current) return;
-                    uploadInProgressRef.current = true;
-                    setUploadBusy(true);
+                    if (!name.trim()) return;
                     try {
-                      const paths = await pickFiles();
-                      const uniquePaths = normalizeUploadPaths(paths);
-                      if (uniquePaths.length === 0) return;
-                      for (const path of uniquePaths) {
-                        await uploadFile(selectedNode.id, path);
-                      }
-                      await reloadFiles();
+                      await createDir(parentId === "ROOT" ? null : parentId, name.trim());
+                      setName("");
                     } catch (e: any) {
                       setError(String(e));
-                    } finally {
-                      uploadInProgressRef.current = false;
-                      setUploadBusy(false);
                     }
                   }}
-                  disabled={uploadBusy}
                   style={{ padding: 10, borderRadius: 10 }}
                 >
-                  {uploadBusy ? "Загрузка..." : "Выбрать и загрузить"}
+                  Создать папку
                 </button>
-                <div style={{ fontSize: 12, opacity: 0.6 }}>
-                  Всего: {files.length}
-                </div>
               </div>
+            </div>
 
-              <SearchPanel
-                searchName={searchName}
-                searchType={searchType}
-                searchAll={searchAll}
-                searchBusy={searchBusy}
-                searchActive={searchActive}
-                foundCount={files.length}
-                onSearchNameChange={setSearchName}
-                onSearchTypeChange={setSearchType}
-                onSearchAllChange={setSearchAll}
-                onRunSearch={runSearch}
-                onReset={async () => {
-                  if (!selectedNode) return;
-                  setSearchName("");
-                  setSearchType("");
-                  setSearchAll(false);
-                  setSearchActive(false);
-                  setSelectedFiles(new Set());
-                  try {
-                    await refreshFiles(selectedNode.id);
-                  } catch (e: any) {
-                    setError(String(e));
-                  }
-                }}
-              />
+            <div style={{ padding: 12, border: "1px solid #eee", borderRadius: 10 }}>
+              <b>Переименовать папку</b>
+              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
+                <input
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  placeholder="Новое имя..."
+                  disabled={!selectedNode || isRootSelected}
+                  style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+                />
+                <button
+                  onClick={async () => {
+                    if (!selectedNode || isRootSelected) return;
+                    if (!renameValue.trim()) return;
+                    try {
+                      await renameDir(selectedNode.id, renameValue.trim());
+                    } catch (e: any) {
+                      setError(String(e));
+                    }
+                  }}
+                  disabled={!selectedNode || isRootSelected}
+                  style={{ padding: 10, borderRadius: 10 }}
+                >
+                  Переименовать
+                </button>
+              </div>
+            </div>
 
-
-              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
+            <div style={{ padding: 12, border: "1px solid #eee", borderRadius: 10 }}>
+              <b>Переместить папку</b>
+              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
                 <select
-                  value={fileMoveTarget}
-                  onChange={(e) => setFileMoveTarget(e.target.value)}
-                  disabled={fileMoveOptions.length === 0}
+                  value={moveParentId}
+                  onChange={(e) => setMoveParentId(e.target.value)}
+                  disabled={!selectedNode || isRootSelected || moveOptions.length === 0}
                   style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", background: "#fff" }}
                 >
-                  <option value="" disabled>
-                    Куда переместить…
-                  </option>
-                  {fileMoveOptions.map((opt) => (
+                  {moveOptions.map((opt) => (
                     <option key={opt.id} value={opt.id}>
                       {opt.label}
                     </option>
@@ -554,192 +573,396 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                 </select>
                 <button
                   onClick={async () => {
-                    if (!selectedNode) return;
-                    const ids = Array.from(selectedFiles);
-                    if (ids.length === 0 || !fileMoveTarget) return;
+                    if (!selectedNode || isRootSelected) return;
+                    const target = moveParentId === "ROOT" ? null : moveParentId;
                     try {
-                      await moveFiles(ids, fileMoveTarget);
-                      await reloadFiles();
-                      setSelectedFiles(new Set());
+                      await moveDir(selectedNode.id, target);
                     } catch (e: any) {
                       setError(String(e));
                     }
                   }}
-                  disabled={!fileMoveTarget || selectedFiles.size === 0}
+                  disabled={!selectedNode || isRootSelected || moveOptions.length === 0}
                   style={{ padding: 10, borderRadius: 10 }}
                 >
-                  Переместить выбранные
+                  Переместить
                 </button>
               </div>
+            </div>
 
-              <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>
+            <div style={{ padding: 12, border: "1px solid #f3bcbc", borderRadius: 10, background: "#fff4f4" }}>
+              <b style={{ color: "#9d1f1f" }}>Опасные действия</b>
+              <div style={{ marginTop: 8 }}>
                 <button
                   onClick={async () => {
-                    if (!selectedNode) return;
-                    const ids = Array.from(selectedFiles);
-                    if (ids.length === 0) return;
-                    const ok = window.confirm(`Удалить файлов: ${ids.length}?`);
+                    if (!selectedNode || isRootSelected) return;
+                    const ok = window.confirm("Удалить папку? Действие нельзя отменить.");
                     if (!ok) return;
                     try {
-                      await deleteFiles(ids);
-                      await reloadFiles();
-                      setSelectedFiles(new Set());
+                      await deleteDir(selectedNode.id);
+                      setParentId("ROOT");
                     } catch (e: any) {
                       setError(String(e));
                     }
                   }}
-                  disabled={selectedFiles.size === 0}
+                  disabled={!selectedNode || isRootSelected}
                   style={{ padding: 10, borderRadius: 10, background: "#fee", border: "1px solid #f99" }}
                 >
-                  Удалить выбранные
+                  Удалить папку
                 </button>
-                <div style={{ fontSize: 12, opacity: 0.6 }}>
-                  {selectedFiles.size > 0 ? `Выбрано: ${selectedFiles.size}` : "Выбери файлы для действий"}
+                <div style={{ marginTop: 6, fontSize: 12, opacity: 0.65 }}>
+                  Удаление возможно только для пустой папки.
                 </div>
               </div>
+            </div>
+          </div>
+        ) : null}
 
-              {shareStatus ? (
-                <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: "#f6f6f6" }}>
-                  {shareStatus}
+        {activeTab === "files" ? (
+          <div style={{ marginTop: 14 }}>
+            {!canUseFiles ? (
+              <div style={{ padding: 12, border: "1px dashed #ccc", borderRadius: 10, fontSize: 13, opacity: 0.7 }}>
+                Выбери обычную папку (не «Корень»), чтобы управлять файлами.
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      flex: 1,
+                      minWidth: 260,
+                      border: "1px dashed #bbb",
+                      borderRadius: 12,
+                      padding: "10px 12px",
+                      background: dropActive ? "#f0f7ff" : "#fafafa",
+                      color: "#333"
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <b>{dropActive ? "Отпускай файлы для загрузки" : "Перетащи файлы сюда"}</b>
+                      <Hint text="Можно также загрузить файлы через кнопку справа." />
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.65 }}>
+                      Локальные копии не дублируются: при повторной загрузке запрашивается перезапись.
+                    </div>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!selectedNode || isRootSelected || uploadInProgressRef.current) return;
+                      uploadInProgressRef.current = true;
+                      setUploadBusy(true);
+                      try {
+                        const paths = await pickFiles();
+                        const uniquePaths = normalizeUploadPaths(paths);
+                        if (uniquePaths.length === 0) return;
+                        for (const path of uniquePaths) {
+                          await uploadFile(selectedNode.id, path);
+                        }
+                        await reloadFiles();
+                      } catch (e: any) {
+                        setError(String(e));
+                      } finally {
+                        uploadInProgressRef.current = false;
+                        setUploadBusy(false);
+                      }
+                    }}
+                    disabled={uploadBusy}
+                    style={{ padding: 10, borderRadius: 10 }}
+                  >
+                    {uploadBusy ? "Загрузка..." : "Выбрать и загрузить"}
+                  </button>
                 </div>
-              ) : null}
 
-              <SharePanel
-                shareFile={shareFile}
-                shareQuery={shareQuery}
-                shareResults={shareResults}
-                shareBusy={shareBusy}
-                onShareQueryChange={setShareQuery}
-                onClose={() => {
-                  setShareFile(null);
-                  setShareQuery("");
-                  setShareResults([]);
-                }}
-                onSearch={async () => {
-                  const query = shareQuery.trim();
-                  if (!query) return;
-                  try {
-                    setShareBusy(true);
-                    const res = await searchChats(query);
-                    setShareResults(res);
-                  } catch (e: any) {
-                    setError(String(e));
-                  } finally {
-                    setShareBusy(false);
-                  }
-                }}
-                onLoadRecent={async () => {
-                  try {
-                    setShareBusy(true);
-                    const recent = await getRecentChats();
-                    setShareResults(recent);
-                  } catch (e: any) {
-                    setError(String(e));
-                  } finally {
-                    setShareBusy(false);
-                  }
-                }}
-                onSend={async (chatId) => {
-                  if (!shareFile) return;
-                  try {
-                    setShareBusy(true);
-                    const msg = await shareFileToChat(shareFile.id, chatId);
-                    setShareStatus(msg);
-                    setShareFile(null);
-                    setShareResults([]);
-                    setShareQuery("");
-                  } catch (e: any) {
-                    setError(String(e));
-                  } finally {
-                    setShareBusy(false);
-                  }
-                }}
-              />
+                {searchActive ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: 10,
+                      borderRadius: 8,
+                      border: "1px solid #d8e7ff",
+                      background: "#f4f8ff",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 10,
+                      flexWrap: "wrap"
+                    }}
+                  >
+                    <span style={{ fontSize: 12 }}>Сейчас отображаются результаты поиска.</span>
+                    <button onClick={() => void resetSearch()} style={{ padding: "6px 10px", borderRadius: 8 }}>
+                      Сбросить поиск
+                    </button>
+                  </div>
+                ) : null}
 
-              <FileList
-                files={files}
-                selectedFiles={selectedFiles}
-                onToggleSelect={(fileId) => {
-                  setSelectedFiles((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(fileId)) next.delete(fileId);
-                    else next.add(fileId);
-                    return next;
-                  });
-                }}
-                onDownload={async (file) => {
-                  try {
-                    await handleDownloadAction({
-                      file,
-                      confirm: (message) => window.confirm(message),
-                      downloadFile,
-                      reloadFiles
-                    });
-                  } catch (e: any) {
-                    setError(String(e));
-                  }
-                }}
-                onOpen={async (file) => {
-                  try {
-                    await handleOpenAction({
-                      file,
-                      openFile,
-                      reloadFiles
-                    });
-                  } catch (e: any) {
-                    setError(String(e));
-                  }
-                }}
-                onOpenFolder={async (file) => {
-                  try {
-                    await handleOpenFolderAction({
-                      file,
-                      openFileFolder
-                    });
-                  } catch (e: any) {
-                    setError(String(e));
-                  }
-                }}
-                onShare={(file) => {
-                  setShareFile(file);
-                  setShareStatus(null);
-                }}
-                onRepair={async (file) => {
-                  try {
-                    let res = await repairFile(file.id);
-                    if (!res.ok && res.code === REPAIR_NEED_FILE) {
-                      const paths = await pickFiles();
-                      if (!paths || paths.length === 0) return;
-                      res = await repairFile(file.id, paths[0]);
-                    }
-                    if (!res.ok) {
-                      setError(res.message);
-                      return;
-                    }
-                    await reloadFiles();
-                  } catch (e: any) {
-                    setError(String(e));
-                  }
-                }}
-                onDelete={async (file) => {
-                  const ok = window.confirm("Удалить файл?");
-                  if (!ok) return;
-                  try {
-                    await deleteFiles([file.id]);
-                    if (selectedNode) await reloadFiles();
-                    setSelectedFiles((prev) => {
-                      const next = new Set(prev);
-                      next.delete(file.id);
-                      return next;
-                    });
-                  } catch (e: any) {
-                    setError(String(e));
-                  }
-                }}
-              />
-            </>
-          )}
-        </div>
+                <details style={{ marginTop: 10 }}>
+                  <summary
+                    style={{
+                      cursor: "pointer",
+                      padding: "8px 10px",
+                      borderRadius: 8,
+                      border: "1px solid #ddd",
+                      background: "#fafafa"
+                    }}
+                  >
+                    Действия с выбранными файлами ({selectedFiles.size})
+                  </summary>
+                  <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
+                      <select
+                        value={fileMoveTarget}
+                        onChange={(e) => setFileMoveTarget(e.target.value)}
+                        disabled={fileMoveOptions.length === 0}
+                        style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", background: "#fff" }}
+                      >
+                        <option value="" disabled>
+                          Куда переместить…
+                        </option>
+                        {fileMoveOptions.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={async () => {
+                          const ids = Array.from(selectedFiles);
+                          if (ids.length === 0 || !fileMoveTarget) return;
+                          try {
+                            await moveFiles(ids, fileMoveTarget);
+                            await reloadFiles();
+                            setSelectedFiles(new Set());
+                          } catch (e: any) {
+                            setError(String(e));
+                          }
+                        }}
+                        disabled={!fileMoveTarget || selectedFiles.size === 0}
+                        style={{ padding: 10, borderRadius: 10 }}
+                      >
+                        Переместить выбранные
+                      </button>
+                    </div>
+
+                    <div style={{ padding: 10, borderRadius: 8, border: "1px solid #f2b8b8", background: "#fff6f6" }}>
+                      <button
+                        onClick={async () => {
+                          const ids = Array.from(selectedFiles);
+                          if (ids.length === 0) return;
+                          const ok = window.confirm(`Удалить файлов: ${ids.length}?`);
+                          if (!ok) return;
+                          try {
+                            await deleteFiles(ids);
+                            await reloadFiles();
+                            setSelectedFiles(new Set());
+                          } catch (e: any) {
+                            setError(String(e));
+                          }
+                        }}
+                        disabled={selectedFiles.size === 0}
+                        style={{ padding: 10, borderRadius: 10, background: "#fee", border: "1px solid #f99" }}
+                      >
+                        Удалить выбранные
+                      </button>
+                    </div>
+                  </div>
+                </details>
+
+                {shareStatus ? (
+                  <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: "#f6f6f6" }}>
+                    {shareStatus}
+                  </div>
+                ) : null}
+
+                {fileList}
+
+                {shareFile ? (
+                  <SharePanel
+                    shareFile={shareFile}
+                    shareQuery={shareQuery}
+                    shareResults={shareResults}
+                    shareBusy={shareBusy}
+                    onShareQueryChange={setShareQuery}
+                    onClose={() => {
+                      setShareFile(null);
+                      setShareQuery("");
+                      setShareResults([]);
+                    }}
+                    onSearch={async () => {
+                      const query = shareQuery.trim();
+                      if (!query) return;
+                      try {
+                        setShareBusy(true);
+                        const res = await searchChats(query);
+                        setShareResults(res);
+                      } catch (e: any) {
+                        setError(String(e));
+                      } finally {
+                        setShareBusy(false);
+                      }
+                    }}
+                    onLoadRecent={async () => {
+                      try {
+                        setShareBusy(true);
+                        const recent = await getRecentChats();
+                        setShareResults(recent);
+                      } catch (e: any) {
+                        setError(String(e));
+                      } finally {
+                        setShareBusy(false);
+                      }
+                    }}
+                    onSend={async (chatId) => {
+                      if (!shareFile) return;
+                      try {
+                        setShareBusy(true);
+                        const msg = await shareFileToChat(shareFile.id, chatId);
+                        setShareStatus(msg);
+                        setShareFile(null);
+                        setShareResults([]);
+                        setShareQuery("");
+                      } catch (e: any) {
+                        setError(String(e));
+                      } finally {
+                        setShareBusy(false);
+                      }
+                    }}
+                  />
+                ) : null}
+              </>
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === "search" ? (
+          <div style={{ marginTop: 14 }}>
+            {!canUseFiles ? (
+              <div style={{ padding: 12, border: "1px dashed #ccc", borderRadius: 10, fontSize: 13, opacity: 0.7 }}>
+                Выбери папку, чтобы искать в ней или по всему хранилищу.
+              </div>
+            ) : (
+              <>
+                <SearchPanel
+                  searchName={searchName}
+                  searchType={searchType}
+                  searchAll={searchAll}
+                  searchBusy={searchBusy}
+                  searchActive={searchActive}
+                  foundCount={files.length}
+                  onSearchNameChange={setSearchName}
+                  onSearchTypeChange={setSearchType}
+                  onSearchAllChange={setSearchAll}
+                  onRunSearch={runSearch}
+                  onReset={resetSearch}
+                />
+                {searchActive ? (
+                  <>
+                    {fileList}
+                    {shareFile ? (
+                      <SharePanel
+                        shareFile={shareFile}
+                        shareQuery={shareQuery}
+                        shareResults={shareResults}
+                        shareBusy={shareBusy}
+                        onShareQueryChange={setShareQuery}
+                        onClose={() => {
+                          setShareFile(null);
+                          setShareQuery("");
+                          setShareResults([]);
+                        }}
+                        onSearch={async () => {
+                          const query = shareQuery.trim();
+                          if (!query) return;
+                          try {
+                            setShareBusy(true);
+                            const res = await searchChats(query);
+                            setShareResults(res);
+                          } catch (e: any) {
+                            setError(String(e));
+                          } finally {
+                            setShareBusy(false);
+                          }
+                        }}
+                        onLoadRecent={async () => {
+                          try {
+                            setShareBusy(true);
+                            const recent = await getRecentChats();
+                            setShareResults(recent);
+                          } catch (e: any) {
+                            setError(String(e));
+                          } finally {
+                            setShareBusy(false);
+                          }
+                        }}
+                        onSend={async (chatId) => {
+                          if (!shareFile) return;
+                          try {
+                            setShareBusy(true);
+                            const msg = await shareFileToChat(shareFile.id, chatId);
+                            setShareStatus(msg);
+                            setShareFile(null);
+                            setShareResults([]);
+                            setShareQuery("");
+                          } catch (e: any) {
+                            setError(String(e));
+                          } finally {
+                            setShareBusy(false);
+                          }
+                        }}
+                      />
+                    ) : null}
+                  </>
+                ) : (
+                  <div style={{ marginTop: 10, fontSize: 12, opacity: 0.65 }}>
+                    Введи параметры и нажми «Найти».
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === "service" ? (
+          <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
+            <div style={{ padding: 12, border: "1px solid #eee", borderRadius: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <b>Проверка целостности и бэкапы</b>
+                <Hint text="Эти операции находятся в Настройках, чтобы не перегружать основной экран." />
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+                Для проверки целостности, бэкапа и восстановления базы открой раздел «Настройки» в правом верхнем углу.
+              </div>
+            </div>
+
+            <div style={{ padding: 12, border: "1px solid #eee", borderRadius: 10 }}>
+              <b>Восстановление выбранной папки</b>
+              {selectedNode && !isRootSelected && selectedNode.is_broken ? (
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await repairDir(selectedNode.id);
+                        if (!res.ok) {
+                          setError(res.message);
+                        }
+                      } catch (e: any) {
+                        setError(String(e));
+                      }
+                    }}
+                    style={{ padding: 10, borderRadius: 10 }}
+                  >
+                    Восстановить папку
+                  </button>
+                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.65 }}>
+                    Пересоздаёт или обновляет служебное сообщение папки в канале хранения.
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 6, fontSize: 12, opacity: 0.65 }}>
+                  У текущей папки нет признаков повреждения.
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

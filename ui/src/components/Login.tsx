@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { invokeSafe } from "../tauri";
 import { useAppStore } from "../store/app";
+import { Hint } from "./common/Hint";
 
 export function Login() {
   const { auth, setError, refreshAuth, tdlibBuild, tgSettings } = useAppStore();
@@ -17,31 +18,74 @@ export function Login() {
     tdlibBuild.state === "configure" ||
     tdlibBuild.state === "build" ||
     tdlibBuild.state === "download";
+
   const creds = tgSettings.credentials;
   const hasSettings = creds.available;
   const locked = creds.locked;
   const showConfigHint = auth === "wait_config" || buildInProgress || buildError || locked || !hasSettings;
 
+  const checklist = useMemo(
+    () => [
+      {
+        done: hasSettings || locked,
+        label: "Указать API_ID и API_HASH",
+        detail: hasSettings ? "Ключи готовы" : locked ? "Ключи сохранены, нужен пароль" : "Нужна настройка"
+      },
+      {
+        done: !buildInProgress && !buildError,
+        label: "Подготовить TDLib",
+        detail: buildInProgress ? "Идет подготовка" : buildError ? "Ошибка подготовки" : "Готово"
+      },
+      {
+        done: auth === "wait_code" || auth === "wait_password" || auth === "ready",
+        label: "Запросить код",
+        detail: auth === "wait_phone" || auth === "wait_config" ? "Ожидается" : "Готово"
+      },
+      {
+        done: auth === "ready",
+        label: "Завершить вход",
+        detail: auth === "ready" ? "Готово" : "Ожидается"
+      }
+    ],
+    [hasSettings, locked, buildInProgress, buildError, auth]
+  );
+
   return (
-    <div style={{ display: "grid", gap: 10, maxWidth: 520 }}>
+    <div style={{ display: "grid", gap: 10, maxWidth: 560 }}>
       <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
-        <b>Авторизация Telegram</b>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <b>Авторизация Telegram</b>
+          <Hint text="Нужны API_ID/API_HASH и рабочая TDLib. Всё это настраивается кнопкой «Настройки» в правом верхнем углу." />
+        </div>
         <div style={{ opacity: 0.8, marginTop: 6 }}>
-          Нужны API_ID и API_HASH. Путь к TDLib можно указать в настройках или оставить пустым для автосборки.
+          Процесс входа идет по шагам. Если что-то не готово, сначала открой «Настройки».
         </div>
       </div>
+
+      <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10, background: "#fafafa" }}>
+        <b>Чеклист первого запуска</b>
+        <div style={{ marginTop: 8, display: "grid", gap: 6, fontSize: 13 }}>
+          {checklist.map((item) => (
+            <div key={item.label}>
+              {item.done ? "[x]" : "[ ]"} {item.label}
+              <span style={{ opacity: 0.65 }}> — {item.detail}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {showConfigHint ? (
         <div style={{ padding: 12, border: "1px solid #f99", borderRadius: 10, background: "#fee" }}>
           {buildInProgress ? (
-            <div>Идет подготовка TDLib. Подробности смотри в настройках.</div>
+            <div>Идет подготовка TDLib. Дождись завершения и продолжай вход.</div>
           ) : buildError ? (
-            <div>Сборка TDLib завершилась ошибкой. Открой настройки.</div>
+            <div>Ошибка подготовки TDLib. Открой «Настройки», исправь и сохрани.</div>
           ) : locked ? (
-            <div>Ключи сохранены, нужен пароль для расшифровки. Открой настройки.</div>
+            <div>Ключи зашифрованы. Открой «Настройки» и разблокируй их паролем.</div>
           ) : hasSettings ? (
-            <div>Ключи получены. Ожидаю запуск TDLib, проверь статус в настройках.</div>
+            <div>Ключи сохранены. Если вход не стартует, проверь статус TDLib в «Настройках».</div>
           ) : (
-            <div>Сначала укажи API_ID и API_HASH в настройках.</div>
+            <div>Сначала укажи API_ID и API_HASH в «Настройках».</div>
           )}
         </div>
       ) : null}

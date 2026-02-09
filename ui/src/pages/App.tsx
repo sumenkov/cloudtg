@@ -4,6 +4,7 @@ import { useAppStore } from "../store/app";
 import { FileManager } from "../components/FileManager";
 import { Login } from "../components/Login";
 import { Settings } from "../components/Settings";
+import { Hint } from "../components/common/Hint";
 import {
   createAuthStateChangedHandler,
   createListenerRegistrar,
@@ -156,7 +157,7 @@ export default function App() {
         </button>
       </div>
       <p style={{ marginTop: 0, opacity: 0.8 }}>
-        Файлы в Telegram, структура в SQLite. Авторизация через TDLib.
+        Добро пожаловать в CloudTG. Здесь можно хранить, искать и открывать файлы из Telegram как в обычном файловом менеджере.
       </p>
 
       {tdlibBuild.state && tdlibBuild.state !== "success" ? (
@@ -221,7 +222,10 @@ export default function App() {
             background: "#fafafa"
           }}
         >
-          <b>Синхронизация из Telegram</b>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <b>Синхронизация из Telegram</b>
+            <Hint text="Синхронизация может идти в фоне. Можно продолжать работу с интерфейсом." />
+          </div>
           <div style={{ marginTop: 6 }}>{tgSync.message ?? "Читаю сообщения канала"}</div>
           <div style={{ marginTop: 8, height: 8, background: "#e5e5e5", borderRadius: 999, overflow: "hidden" }}>
             <div
@@ -265,9 +269,12 @@ export default function App() {
           }}
         >
           <div>
-            <b>Импорт из канала</b>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <b>Обновить из Telegram</b>
+              <Hint text="Проверяем новые файлы и изменения в канале хранения." />
+            </div>
             <div style={{ marginTop: 4, fontSize: 12, opacity: 0.7 }}>
-              Ищем новые файлы, добавленные вручную в канал хранения.
+              Считываем новые сообщения из канала и обновляем структуру файлов.
             </div>
           </div>
           <button
@@ -282,8 +289,20 @@ export default function App() {
             disabled={tgSync.state === "start" || tgSync.state === "progress"}
             style={{ padding: "10px 14px", borderRadius: 10 }}
           >
-            Запустить импорт
+            Обновить сейчас
           </button>
+        </div>
+      ) : null}
+
+      {auth === "ready" && !showSettings ? (
+        <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, border: "1px solid #eee", background: "#fcfcfc" }}>
+          <b>Как начать работу</b>
+          <ol style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, opacity: 0.8 }}>
+            <li>Выбери папку в дереве слева.</li>
+            <li>Во вкладке «Файлы» загрузи или открой нужный файл.</li>
+            <li>Для поиска используй вкладку «Поиск».</li>
+            <li>Чтобы отправить файл в чат, во вкладке «Файлы» открой меню «⋯ Действия» и нажми «Поделиться».</li>
+          </ol>
         </div>
       ) : null}
 

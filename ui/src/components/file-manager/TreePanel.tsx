@@ -1,5 +1,6 @@
 import React from "react";
 import type { DirNode } from "../../store/app";
+import { Hint } from "../common/Hint";
 
 type TreeRowProps = {
   node: DirNode;
@@ -116,7 +117,10 @@ type TreePanelProps = {
 export function TreePanel({ tree, selectedId, collapsed, onSelect, onToggle }: TreePanelProps) {
   return (
     <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
-      <b>Дерево директорий</b>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <b>Дерево папок</b>
+        <Hint text="Выбери папку для работы. Двойной клик или Enter на строке сворачивает и разворачивает вложенные папки." />
+      </div>
       <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
         Двойной клик или Enter — свернуть/развернуть.
       </div>

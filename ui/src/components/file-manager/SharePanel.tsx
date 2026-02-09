@@ -1,5 +1,6 @@
 import React from "react";
 import type { ChatItem, FileItem } from "../../store/app";
+import { Hint } from "../common/Hint";
 
 type SharePanelProps = {
   shareFile: FileItem | null;
@@ -30,7 +31,10 @@ export function SharePanel({
 
   return (
     <div style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
-      <b>Поделиться файлом</b>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <b>Поделиться файлом</b>
+        <Hint text="Файл отправляется как пересылка сообщения в выбранный чат. Локальная копия для этого не требуется." />
+      </div>
       <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
         Файл: {shareFile.name}
       </div>

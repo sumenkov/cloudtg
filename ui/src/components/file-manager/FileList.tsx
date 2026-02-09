@@ -34,12 +34,19 @@ export function FileList({
           {files.map((file) => {
             const checked = selectedFiles.has(file.id);
             const displaySize = displayFileSizeBytes(file);
+            const primaryLabel = file.is_downloaded ? "Открыть" : "Скачать";
+            const runPrimaryAction = () => {
+              if (file.is_downloaded) {
+                return onOpen(file);
+              }
+              return onDownload(file);
+            };
             return (
               <div
                 key={file.id}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "24px 1fr 120px 120px 420px",
+                  gridTemplateColumns: "24px minmax(0, 1fr) 110px auto",
                   gap: 8,
                   alignItems: "center",
                   padding: "8px 10px",
@@ -69,51 +76,101 @@ export function FileList({
                       </span>
                     ) : null}
                   </div>
-                  <span style={{ fontSize: 11, opacity: 0.6 }}>#{file.hash}</span>
+                  <span style={{ fontSize: 11, opacity: 0.6 }}>
+                    {formatBytes(displaySize)} • #{file.hash}
+                  </span>
                 </div>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>{formatBytes(displaySize)}</div>
                 <div style={{ fontSize: 12, opacity: 0.5 }}>{file.id.slice(0, 6)}</div>
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
                   <button
-                    onClick={() => void onDownload(file)}
-                    style={{ padding: "6px 10px", borderRadius: 8 }}
+                    onClick={() => void runPrimaryAction()}
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: 8,
+                      background: "#e8f1ff",
+                      border: "1px solid #b7d0ff"
+                    }}
                   >
-                    Скачать
+                    {primaryLabel}
                   </button>
-                  <button
-                    onClick={() => void onOpen(file)}
-                    style={{ padding: "6px 10px", borderRadius: 8 }}
-                  >
-                    Открыть
-                  </button>
-                  {shouldShowOpenFolderButton(file) ? (
-                    <button
-                      onClick={() => void onOpenFolder(file)}
-                      style={{ padding: "6px 10px", borderRadius: 8 }}
+                  <details>
+                    <summary
+                      style={{
+                        listStyle: "none",
+                        cursor: "pointer",
+                        padding: "6px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #d8d8d8",
+                        background: "#fff",
+                        fontSize: 12,
+                        userSelect: "none"
+                      }}
                     >
-                      Открыть папку
-                    </button>
-                  ) : null}
-                  <button
-                    onClick={() => onShare(file)}
-                    style={{ padding: "6px 10px", borderRadius: 8 }}
-                  >
-                    Поделиться
-                  </button>
-                  {file.is_broken ? (
-                    <button
-                      onClick={() => void onRepair(file)}
-                      style={{ padding: "6px 10px", borderRadius: 8 }}
+                      ⋯ Действия
+                    </summary>
+                    <div
+                      style={{
+                        marginTop: 6,
+                        display: "grid",
+                        gap: 6,
+                        minWidth: 170,
+                        padding: 8,
+                        border: "1px solid #ddd",
+                        borderRadius: 8,
+                        background: "#fff"
+                      }}
                     >
-                      Восстановить
-                    </button>
-                  ) : null}
-                  <button
-                    onClick={() => void onDelete(file)}
-                    style={{ padding: "6px 10px", borderRadius: 8, background: "#fee", border: "1px solid #f99" }}
-                  >
-                    Удалить
-                  </button>
+                      {!file.is_downloaded ? (
+                        <button
+                          onClick={() => void onOpen(file)}
+                          style={{ padding: "6px 10px", borderRadius: 8, textAlign: "left" }}
+                        >
+                          Открыть (скачается)
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => void onDownload(file)}
+                          style={{ padding: "6px 10px", borderRadius: 8, textAlign: "left" }}
+                        >
+                          Скачать заново
+                        </button>
+                      )}
+                      {shouldShowOpenFolderButton(file) ? (
+                        <button
+                          onClick={() => void onOpenFolder(file)}
+                          style={{ padding: "6px 10px", borderRadius: 8, textAlign: "left" }}
+                        >
+                          Открыть папку
+                        </button>
+                      ) : null}
+                      <button
+                        onClick={() => onShare(file)}
+                        style={{ padding: "6px 10px", borderRadius: 8, textAlign: "left" }}
+                      >
+                        Поделиться
+                      </button>
+                      {file.is_broken ? (
+                        <button
+                          onClick={() => void onRepair(file)}
+                          style={{ padding: "6px 10px", borderRadius: 8, textAlign: "left" }}
+                        >
+                          Восстановить
+                        </button>
+                      ) : null}
+                      <button
+                        onClick={() => void onDelete(file)}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 8,
+                          textAlign: "left",
+                          background: "#fee",
+                          border: "1px solid #f99"
+                        }}
+                      >
+                        Удалить
+                      </button>
+                    </div>
+                  </details>
                 </div>
               </div>
             );

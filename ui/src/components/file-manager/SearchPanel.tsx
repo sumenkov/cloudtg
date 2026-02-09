@@ -1,4 +1,5 @@
 import React from "react";
+import { Hint } from "../common/Hint";
 
 type SearchPanelProps = {
   searchName: string;
@@ -29,7 +30,10 @@ export function SearchPanel({
 }: SearchPanelProps) {
   return (
     <div style={{ marginTop: 10, padding: 12, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
-      <b>Поиск</b>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <b>Поиск</b>
+        <Hint text="Можно искать по имени и/или расширению. Если отметить «Во всех папках», поиск не ограничивается текущей папкой." />
+      </div>
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 160px", gap: 8 }}>
         <input
           value={searchName}
