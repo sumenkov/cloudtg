@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore, DirNode, ChatItem, FileItem } from "../store/app";
 import { listenSafe } from "../tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -185,6 +185,9 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const [searchAll, setSearchAll] = useState(false);
   const [searchActive, setSearchActive] = useState(false);
   const [searchBusy, setSearchBusy] = useState(false);
+  const selectedNodeRef = useRef<DirNode | null>(null);
+  const isRootSelectedRef = useRef<boolean>(false);
+  const reloadFilesRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     if (!tree) return;
@@ -206,7 +209,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     return findNode(tree, parentId);
   }, [tree, parentId]);
 
-  const runSearch = async () => {
+  const runSearch = useCallback(async () => {
     if (!selectedNode) return;
     const name = searchName.trim();
     const fileType = searchType.trim();
@@ -230,16 +233,16 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     } finally {
       setSearchBusy(false);
     }
-  };
+  }, [selectedNode, searchName, searchType, refreshFiles, searchFiles, searchAll, setError]);
 
-  const reloadFiles = async () => {
+  const reloadFiles = useCallback(async () => {
     if (!selectedNode) return;
     if (searchActive) {
       await runSearch();
     } else {
       await refreshFiles(selectedNode.id);
     }
-  };
+  }, [selectedNode, searchActive, runSearch, refreshFiles]);
 
   useEffect(() => {
     if (!selectedNode) {
@@ -299,6 +302,10 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const isRootSelected = selectedNode?.id === "ROOT";
   const canUseFiles = Boolean(selectedNode && !isRootSelected);
 
+  selectedNodeRef.current = selectedNode;
+  isRootSelectedRef.current = isRootSelected;
+  reloadFilesRef.current = reloadFiles;
+
   useEffect(() => {
     if (!selectedNode) return;
     refreshFiles(selectedNode.id).catch((e) => setError(String(e)));
@@ -309,8 +316,8 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     (async () => {
       try {
         unlisten = await listenSafe("tree_updated", async () => {
-          if (!selectedNode || isRootSelected) return;
-          await reloadFiles();
+          if (!selectedNodeRef.current || isRootSelectedRef.current) return;
+          await reloadFilesRef.current();
         });
       } catch (e: any) {
         setError(String(e));
@@ -319,16 +326,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     return () => {
       if (unlisten) unlisten();
     };
-  }, [
-    selectedNode,
-    isRootSelected,
-    searchActive,
-    searchName,
-    searchType,
-    searchAll,
-    reloadFiles,
-    setError
-  ]);
+  }, [setError]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -344,16 +342,17 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
           setDropActive(false);
           const paths = payload.paths as string[] | undefined;
           if (!paths || paths.length === 0) return;
-          if (!selectedNode || isRootSelected) {
+          const currentNode = selectedNodeRef.current;
+          if (!currentNode || isRootSelectedRef.current) {
             setError("Выбери папку, чтобы загрузить файлы.");
             return;
           }
           (async () => {
             try {
               for (const path of paths) {
-                await uploadFile(selectedNode.id, path);
+                await uploadFile(currentNode.id, path);
               }
-              await reloadFiles();
+              await reloadFilesRef.current();
             } catch (e: any) {
               setError(String(e));
             }
@@ -369,7 +368,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     return () => {
       if (unlisten) unlisten();
     };
-  }, [selectedNode, isRootSelected, uploadFile, refreshFiles, setError]);
+  }, [uploadFile, setError]);
 
   const fileMoveOptions = useMemo(() => {
     if (!tree) return [];
@@ -386,7 +385,8 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       setFileMoveTarget("");
       return;
     }
-    if (!fileMoveTarget) {
+    const stillExists = fileMoveOptions.some((option) => option.id === fileMoveTarget);
+    if (!fileMoveTarget || !stillExists) {
       setFileMoveTarget(fileMoveOptions[0].id);
     }
   }, [canUseFiles, fileMoveOptions, fileMoveTarget]);
