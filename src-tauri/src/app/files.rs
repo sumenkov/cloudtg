@@ -900,7 +900,7 @@ async fn remove_local_download(
   paths: &Paths,
   dir_id: &str,
   name: &str,
-  size: i64
+  _size: i64
 ) -> anyhow::Result<()> {
   let dir_path = build_dir_path(pool, dir_id).await?;
   let base_dir = paths.cache_dir.join("downloads").join(dir_path);
@@ -932,15 +932,9 @@ async fn remove_local_download(
     if cand_ext != ext || !is_name_variant(&stem, &cand_stem) {
       continue;
     }
-    if size > 0 {
-      if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() as i64 != size {
-          continue;
-        }
-      }
+    if std::fs::remove_file(&path).is_ok() {
+      removed = true;
     }
-    let _ = std::fs::remove_file(&path);
-    removed = true;
   }
 
   let should_cleanup = removed || std::fs::read_dir(&base_dir).map(|mut it| it.next().is_none()).unwrap_or(false);
@@ -1411,6 +1405,29 @@ mod tests {
     assert_eq!(chat_id, -5002);
     assert_eq!(msg_id, 555);
     assert_eq!(size, "fallback payload".len() as i64);
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn delete_file_removes_local_copy_even_when_db_size_is_stale() -> anyhow::Result<()> {
+    let (_tmp, db, paths) = setup_db_and_paths().await?;
+    seed_one_file(db.pool(), "f_del", "d_del", "report.txt", 9999, -7001, 701).await?;
+
+    let local_dir = paths.cache_dir.join("downloads").join("Документы");
+    std::fs::create_dir_all(&local_dir)?;
+    let local_path = local_dir.join("report.txt");
+    std::fs::write(&local_path, b"local copy")?;
+
+    let tg = MockTelegram::default();
+    delete_file(db.pool(), &tg, &paths, "f_del").await?;
+
+    assert!(!local_path.exists());
+
+    let row = sqlx::query("SELECT id FROM files WHERE id = ?")
+      .bind("f_del")
+      .fetch_optional(db.pool())
+      .await?;
+    assert!(row.is_none());
     Ok(())
   }
 }

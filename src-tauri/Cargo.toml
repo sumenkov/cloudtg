@@ -1,6 +1,6 @@
 [package]
 name = "cloudtg"
-version = "1.0.2"
+version = "1.0.3"
 description = "CloudTG backend (Tauri + Rust)"
 authors = ["you"]
 edition = "2021"
