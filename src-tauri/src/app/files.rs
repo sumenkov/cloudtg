@@ -1,5 +1,6 @@
 use chrono::Utc;
-use sqlx::{SqlitePool, Row, QueryBuilder};
+use crate::sqlx::{self, QueryBuilder, Row};
+use sqlx_sqlite::SqlitePool;
 use ulid::Ulid;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -479,12 +480,9 @@ pub async fn download_file(
     let _ = std::fs::remove_file(&target_path);
   }
 
-  match tg.download_message_file(msg_chat_id, msg_id, target_path.clone()).await {
-    Ok(path) => {
-      update_file_size_from_local(pool, file_id, &path).await?;
-      return Ok(path);
-    }
-    Err(_) => {}
+  if let Ok(path) = tg.download_message_file(msg_chat_id, msg_id, target_path.clone()).await {
+    update_file_size_from_local(pool, file_id, &path).await?;
+    return Ok(path);
   }
 
   if let Ok(Some((found_chat_id, found_msg_id))) =
@@ -638,11 +636,9 @@ fn folder_hashtag(name: &str) -> Option<String> {
     if ch.is_alphanumeric() {
       out.push(ch);
       last_underscore = false;
-    } else if ch == '_' || ch.is_whitespace() || ch == '-' || ch == '.' {
-      if !last_underscore {
-        out.push('_');
-        last_underscore = true;
-      }
+    } else if (ch == '_' || ch.is_whitespace() || ch == '-' || ch == '.') && !last_underscore {
+      out.push('_');
+      last_underscore = true;
     }
   }
   let cleaned = out.trim_matches('_').to_string();
@@ -700,13 +696,19 @@ async fn build_dir_path(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<PathB
 fn sanitize_component(name: &str) -> String {
   let mut out = String::new();
   for ch in name.chars() {
-    if ch == '/' || ch == '\\' || ch == ':' {
+    if ch == '/' || ch == '\\' || ch == ':' || ch == '\0' || ch.is_control() {
       out.push('_');
     } else {
       out.push(ch);
     }
   }
-  out.trim().to_string()
+  let cleaned = out.trim().to_string();
+  // Не допускаем спец-сегменты пути, чтобы исключить выход за пределы cache/downloads.
+  if cleaned == "." || cleaned == ".." {
+    "_".to_string()
+  } else {
+    cleaned
+  }
 }
 
 fn resolve_target_path(base_dir: &Path, name: &str, size: i64) -> anyhow::Result<PathBuf> {
@@ -1014,5 +1016,18 @@ mod tests {
     let (downloaded, local_size) = local_download_info(&paths, &dir_path, "report.txt", 0);
     assert!(downloaded);
     assert_eq!(local_size, Some(11));
+  }
+
+  #[test]
+  fn sanitize_component_rejects_relative_segments() {
+    assert_eq!(sanitize_component("."), "_");
+    assert_eq!(sanitize_component(".."), "_");
+    assert_eq!(sanitize_component("  ..  "), "_");
+  }
+
+  #[test]
+  fn sanitize_component_replaces_forbidden_chars() {
+    assert_eq!(sanitize_component("a/b\\c:d"), "a_b_c_d");
+    assert_eq!(sanitize_component("name\0with\rbad\nchars"), "name_with_bad_chars");
   }
 }

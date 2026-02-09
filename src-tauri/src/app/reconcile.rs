@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use chrono::Utc;
-use sqlx::{SqlitePool, Row};
+use crate::sqlx::{self, Row};
+use sqlx_sqlite::SqlitePool;
 
 use crate::telegram::{TelegramService, ChatId, HistoryMessage};
 use crate::app::{indexer, sync};

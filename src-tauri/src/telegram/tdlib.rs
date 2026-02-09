@@ -131,8 +131,8 @@ impl TdlibClient {
 pub struct TdlibTelegram {
   tx: mpsc::Sender<TdlibCommand>,
   paths: Paths,
-  send_waiters: std::sync::Arc<Mutex<HashMap<i64, oneshot::Sender<anyhow::Result<i64>>>>>,
-  send_results: std::sync::Arc<Mutex<HashMap<i64, Result<i64, String>>>>
+  send_waiters: SendWaiters,
+  send_results: SendResults
 }
 
 enum TdlibCommand {
@@ -140,6 +140,10 @@ enum TdlibCommand {
   SetConfig { api_id: i32, api_hash: String, tdlib_path: Option<String> },
   Request { payload: Value, respond_to: oneshot::Sender<anyhow::Result<Value>> }
 }
+
+type PendingRequests = HashMap<u64, oneshot::Sender<anyhow::Result<Value>>>;
+type SendWaiters = std::sync::Arc<Mutex<HashMap<i64, oneshot::Sender<anyhow::Result<i64>>>>>;
+type SendResults = std::sync::Arc<Mutex<HashMap<i64, Result<i64, String>>>>;
 
 const STORAGE_CHANNEL_TITLE: &str = "CloudTG";
 const STORAGE_CHANNEL_TITLE_LEGACY: &str = "CloudVault";
@@ -541,8 +545,8 @@ impl TdlibTelegram {
     initial_tdlib_path: Option<String>
   ) -> anyhow::Result<Self> {
     let (tx, rx) = mpsc::channel::<TdlibCommand>();
-    let send_waiters = std::sync::Arc::new(Mutex::new(HashMap::new()));
-    let send_results = std::sync::Arc::new(Mutex::new(HashMap::new()));
+    let send_waiters: SendWaiters = std::sync::Arc::new(Mutex::new(HashMap::new()));
+    let send_results: SendResults = std::sync::Arc::new(Mutex::new(HashMap::new()));
 
     let app_for_thread = app.clone();
     let paths_for_thread = paths.clone();
@@ -562,7 +566,7 @@ impl TdlibTelegram {
       let mut client: Option<TdlibClient> = None;
       let mut pending: Vec<String> = Vec::new();
       let mut build_attempted = false;
-      let mut pending_requests: HashMap<u64, oneshot::Sender<anyhow::Result<Value>>> = HashMap::new();
+      let mut pending_requests: PendingRequests = HashMap::new();
       let mut next_request_id: u64 = 1;
 
       if config.is_none() || lib_path.is_none() {
@@ -572,42 +576,42 @@ impl TdlibTelegram {
       loop {
         match rx.recv_timeout(Duration::from_millis(10)) {
           Ok(cmd) => {
-            handle_command(
-              cmd,
-              &paths_for_thread,
-              &mut config,
-              &mut lib_path,
-              &mut client,
-              &mut waiting_for_params,
-              &mut params_sent,
-              &mut pending_requests,
-              &mut next_request_id,
-              &mut build_attempted,
-              &mut pending,
-              &app_for_thread,
-              &mut last_state
-            );
+            let mut cmd_ctx = CommandCtx {
+              paths: &paths_for_thread,
+              config: &mut config,
+              lib_path: &mut lib_path,
+              client: &mut client,
+              waiting_for_params: &mut waiting_for_params,
+              params_sent: &mut params_sent,
+              pending_requests: &mut pending_requests,
+              next_request_id: &mut next_request_id,
+              build_attempted: &mut build_attempted,
+              pending: &mut pending,
+              app: &app_for_thread,
+              last_state: &mut last_state
+            };
+            handle_command(cmd, &mut cmd_ctx);
           }
           Err(mpsc::RecvTimeoutError::Timeout) => {}
           Err(mpsc::RecvTimeoutError::Disconnected) => break
         }
 
         while let Ok(cmd) = rx.try_recv() {
-          handle_command(
-            cmd,
-            &paths_for_thread,
-            &mut config,
-            &mut lib_path,
-            &mut client,
-            &mut waiting_for_params,
-            &mut params_sent,
-            &mut pending_requests,
-            &mut next_request_id,
-            &mut build_attempted,
-            &mut pending,
-            &app_for_thread,
-            &mut last_state
-          );
+          let mut cmd_ctx = CommandCtx {
+            paths: &paths_for_thread,
+            config: &mut config,
+            lib_path: &mut lib_path,
+            client: &mut client,
+            waiting_for_params: &mut waiting_for_params,
+            params_sent: &mut params_sent,
+            pending_requests: &mut pending_requests,
+            next_request_id: &mut next_request_id,
+            build_attempted: &mut build_attempted,
+            pending: &mut pending,
+            app: &app_for_thread,
+            last_state: &mut last_state
+          };
+          handle_command(cmd, &mut cmd_ctx);
         }
 
         if client.is_none() {
@@ -669,17 +673,17 @@ impl TdlibTelegram {
             if handle_request_response(&value, &mut pending_requests) {
               continue;
             }
-            if let Err(e) = handle_tdlib_response(
-              &value,
-              c,
-              &mut config,
-              &mut waiting_for_params,
-              &mut params_sent,
-              &app_for_thread,
-              &mut last_state,
-              &waiters_for_thread,
-              &results_for_thread
-            ) {
+            let mut response_ctx = ResponseCtx {
+              client: c,
+              config: &mut config,
+              waiting_for_params: &mut waiting_for_params,
+              params_sent: &mut params_sent,
+              app: &app_for_thread,
+              last_state: &mut last_state,
+              send_waiters: &waiters_for_thread,
+              send_results: &results_for_thread
+            };
+            if let Err(e) = handle_tdlib_response(&value, &mut response_ctx) {
               tracing::error!("Ошибка TDLib: {e}");
             }
           }
@@ -1896,34 +1900,35 @@ impl TelegramService for TdlibTelegram {
   }
 }
 
-fn handle_command(
-  cmd: TdlibCommand,
-  paths: &Paths,
-  config: &mut Option<TdlibConfig>,
-  lib_path: &mut Option<PathBuf>,
-  client: &mut Option<TdlibClient>,
-  waiting_for_params: &mut bool,
-  params_sent: &mut bool,
-  pending_requests: &mut HashMap<u64, oneshot::Sender<anyhow::Result<Value>>>,
-  next_request_id: &mut u64,
-  build_attempted: &mut bool,
-  pending: &mut Vec<String>,
-  app: &tauri::AppHandle,
-  last_state: &mut Option<AuthState>
-) {
+struct CommandCtx<'a> {
+  paths: &'a Paths,
+  config: &'a mut Option<TdlibConfig>,
+  lib_path: &'a mut Option<PathBuf>,
+  client: &'a mut Option<TdlibClient>,
+  waiting_for_params: &'a mut bool,
+  params_sent: &'a mut bool,
+  pending_requests: &'a mut PendingRequests,
+  next_request_id: &'a mut u64,
+  build_attempted: &'a mut bool,
+  pending: &'a mut Vec<String>,
+  app: &'a tauri::AppHandle,
+  last_state: &'a mut Option<AuthState>
+}
+
+fn handle_command(cmd: TdlibCommand, ctx: &mut CommandCtx<'_>) {
   match cmd {
     TdlibCommand::Td(m) => {
-      if let Some(c) = client.as_ref() {
+      if let Some(c) = ctx.client.as_ref() {
         let _ = c.send(&m);
       } else {
-        pending.push(m);
+        ctx.pending.push(m);
       }
     }
     TdlibCommand::SetConfig { api_id, api_hash, tdlib_path } => {
       let session_name = tdlib_session_name();
-      match TdlibConfig::from_settings(paths, api_id, api_hash, &session_name) {
+      match TdlibConfig::from_settings(ctx.paths, api_id, api_hash, &session_name) {
         Ok(cfg) => {
-          *config = Some(cfg);
+          *ctx.config = Some(cfg);
         }
         Err(e) => {
           tracing::error!("Не удалось применить настройки TDLib: {e}");
@@ -1931,28 +1936,28 @@ fn handle_command(
         }
       }
 
-      *lib_path = resolve_tdlib_path(paths, tdlib_path.as_deref());
-      *build_attempted = false;
+      *ctx.lib_path = resolve_tdlib_path(ctx.paths, tdlib_path.as_deref());
+      *ctx.build_attempted = false;
 
-      if client.is_some() && *waiting_for_params {
-        if let Some(cfg) = config.as_ref() {
-          if !*params_sent {
+      if ctx.client.is_some() && *ctx.waiting_for_params {
+        if let Some(cfg) = ctx.config.as_ref() {
+          if !*ctx.params_sent {
             let payload = build_tdlib_parameters(cfg);
-            if let Some(c) = client.as_ref() {
+            if let Some(c) = ctx.client.as_ref() {
               let _ = c.send(&payload);
             }
-            *params_sent = true;
-            *waiting_for_params = false;
+            *ctx.params_sent = true;
+            *ctx.waiting_for_params = false;
           }
         }
       }
 
-      if client.is_none() && (config.is_none() || lib_path.is_none()) {
-        set_auth_state(app, AuthState::WaitConfig, last_state);
+      if ctx.client.is_none() && (ctx.config.is_none() || ctx.lib_path.is_none()) {
+        set_auth_state(ctx.app, AuthState::WaitConfig, ctx.last_state);
       }
     }
     TdlibCommand::Request { payload, respond_to } => {
-      if client.is_none() {
+      if ctx.client.is_none() {
         let _ = respond_to.send(Err(anyhow::anyhow!("TDLib еще не инициализирован")));
         return;
       }
@@ -1963,12 +1968,12 @@ fn handle_command(
         return;
       };
 
-      let request_id = *next_request_id;
-      *next_request_id = next_request_id.wrapping_add(1).max(1);
+      let request_id = *ctx.next_request_id;
+      *ctx.next_request_id = (*ctx.next_request_id).wrapping_add(1).max(1);
       obj.insert("@extra".to_string(), json!(request_id));
 
-      pending_requests.insert(request_id, respond_to);
-      if let Some(c) = client.as_ref() {
+      ctx.pending_requests.insert(request_id, respond_to);
+      if let Some(c) = ctx.client.as_ref() {
         let _ = c.send(&request.to_string());
       }
     }
@@ -2061,7 +2066,7 @@ fn run_command(mut cmd: Command, name: &str, app: &tauri::AppHandle) -> anyhow::
     let tx = tx.clone();
     std::thread::spawn(move || {
       let reader = BufReader::new(out);
-      for line in reader.lines().flatten() {
+      for line in reader.lines().map_while(Result::ok) {
         let _ = tx.send(("stdout".to_string(), line));
       }
     });
@@ -2071,7 +2076,7 @@ fn run_command(mut cmd: Command, name: &str, app: &tauri::AppHandle) -> anyhow::
     let tx = tx.clone();
     std::thread::spawn(move || {
       let reader = BufReader::new(err);
-      for line in reader.lines().flatten() {
+      for line in reader.lines().map_while(Result::ok) {
         let _ = tx.send(("stderr".to_string(), line));
       }
     });
@@ -2207,10 +2212,11 @@ fn github_token() -> Option<String> {
 }
 
 fn http_agent() -> ureq::Agent {
-  ureq::AgentBuilder::new()
-    .timeout_connect(Duration::from_secs(10))
-    .timeout_read(Duration::from_secs(60))
+  ureq::Agent::config_builder()
+    .timeout_connect(Some(Duration::from_secs(10)))
+    .timeout_recv_body(Some(Duration::from_secs(60)))
     .build()
+    .into()
 }
 
 fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
@@ -2254,13 +2260,13 @@ fn resolve_tdlib_manifest_url(repo: &str) -> anyhow::Result<Option<String>> {
   let agent = http_agent();
   let mut req = agent
     .get(&format!("https://api.github.com/repos/{repo}/releases/latest"))
-    .set("User-Agent", "cloudtg")
-    .set("Accept", "application/vnd.github+json");
+    .header("User-Agent", "cloudtg")
+    .header("Accept", "application/vnd.github+json");
   if let Some(token) = github_token() {
-    req = req.set("Authorization", &format!("Bearer {token}"));
+    req = req.header("Authorization", &format!("Bearer {token}"));
   }
   let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось получить релиз TDLib: {e}"))?;
-  let body = response.into_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать ответ релиза: {e}"))?;
+  let body = response.into_body().read_to_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать ответ релиза: {e}"))?;
   let json: Value = serde_json::from_str(&body)?;
   if let Some(url) = find_manifest_url(&json) {
     return Ok(Some(url));
@@ -2270,13 +2276,13 @@ fn resolve_tdlib_manifest_url(repo: &str) -> anyhow::Result<Option<String>> {
 
   let mut req = agent
     .get(&format!("https://api.github.com/repos/{repo}/releases?per_page=10"))
-    .set("User-Agent", "cloudtg")
-    .set("Accept", "application/vnd.github+json");
+    .header("User-Agent", "cloudtg")
+    .header("Accept", "application/vnd.github+json");
   if let Some(token) = github_token() {
-    req = req.set("Authorization", &format!("Bearer {token}"));
+    req = req.header("Authorization", &format!("Bearer {token}"));
   }
   let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось получить список релизов TDLib: {e}"))?;
-  let body = response.into_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать список релизов: {e}"))?;
+  let body = response.into_body().read_to_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать список релизов: {e}"))?;
   let releases: Value = serde_json::from_str(&body)?;
   let Some(list) = releases.as_array() else {
     return Ok(None);
@@ -2308,12 +2314,12 @@ fn find_manifest_url(release: &Value) -> Option<String> {
 
 fn fetch_tdlib_manifest(url: &str) -> anyhow::Result<TdlibManifest> {
   let agent = http_agent();
-  let mut req = agent.get(url).set("User-Agent", "cloudtg");
+  let mut req = agent.get(url).header("User-Agent", "cloudtg");
   if let Some(token) = github_token() {
-    req = req.set("Authorization", &format!("Bearer {token}"));
+    req = req.header("Authorization", &format!("Bearer {token}"));
   }
   let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось скачать манифест TDLib: {e}"))?;
-  let body = response.into_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать манифест: {e}"))?;
+  let body = response.into_body().read_to_string().map_err(|e| anyhow::anyhow!("Не удалось прочитать манифест: {e}"))?;
   let manifest: TdlibManifest = serde_json::from_str(&body)?;
   Ok(manifest)
 }
@@ -2325,18 +2331,20 @@ fn download_tdlib_asset(
   app: &tauri::AppHandle
 ) -> anyhow::Result<NamedTempFile> {
   let agent = http_agent();
-  let mut req = agent.get(url).set("User-Agent", "cloudtg");
+  let mut req = agent.get(url).header("User-Agent", "cloudtg");
   if let Some(token) = github_token() {
-    req = req.set("Authorization", &format!("Bearer {token}"));
+    req = req.header("Authorization", &format!("Bearer {token}"));
   }
   let response = req.call().map_err(|e| anyhow::anyhow!("Не удалось скачать TDLib: {e}"))?;
   let mut total = response
-    .header("Content-Length")
+    .headers()
+    .get("Content-Length")
+    .and_then(|v| v.to_str().ok())
     .and_then(|v| v.parse::<u64>().ok());
   if total.is_none() {
     total = total_hint;
   }
-  let mut reader = response.into_reader();
+  let mut reader = response.into_body().into_reader();
   let mut tmp = NamedTempFile::new()?;
   let mut hasher = Sha256::new();
   let mut buf = [0u8; 8192];
@@ -2353,7 +2361,7 @@ fn download_tdlib_asset(
     downloaded += n as u64;
     if let Some(total) = total {
       let percent = ((downloaded * 100) / total) as i32;
-      if percent != last_percent && percent >= 0 && percent <= 100 {
+      if percent != last_percent && (0..=100).contains(&percent) {
         last_percent = percent;
         emit_build_log(app, "stdout", &format!("{percent}%"));
       }
@@ -2546,35 +2554,52 @@ fn tdlib_resource_candidates(resource_dir: &Path) -> Vec<PathBuf> {
   out
 }
 
-fn handle_tdlib_response(
-  v: &Value,
-  client: &TdlibClient,
-  config: &mut Option<TdlibConfig>,
-  waiting_for_params: &mut bool,
-  params_sent: &mut bool,
-  app: &tauri::AppHandle,
-  last_state: &mut Option<AuthState>,
-  send_waiters: &std::sync::Arc<Mutex<HashMap<i64, oneshot::Sender<anyhow::Result<i64>>>>>,
-  send_results: &std::sync::Arc<Mutex<HashMap<i64, Result<i64, String>>>>
-) -> anyhow::Result<()> {
+struct ResponseCtx<'a> {
+  client: &'a TdlibClient,
+  config: &'a mut Option<TdlibConfig>,
+  waiting_for_params: &'a mut bool,
+  params_sent: &'a mut bool,
+  app: &'a tauri::AppHandle,
+  last_state: &'a mut Option<AuthState>,
+  send_waiters: &'a SendWaiters,
+  send_results: &'a SendResults
+}
+
+fn handle_tdlib_response(v: &Value, ctx: &mut ResponseCtx<'_>) -> anyhow::Result<()> {
   let t = v.get("@type").and_then(|v| v.as_str()).unwrap_or("");
 
   if t == "updateAuthorizationState" {
     if let Some(state) = v.get("authorization_state") {
-      handle_auth_state(state, client, config, waiting_for_params, params_sent, app, last_state)?;
+      handle_auth_state(
+        state,
+        ctx.client,
+        ctx.config,
+        ctx.waiting_for_params,
+        ctx.params_sent,
+        ctx.app,
+        ctx.last_state
+      )?;
     }
     return Ok(());
   }
 
   if t.starts_with("authorizationState") {
-    handle_auth_state(&v, client, config, waiting_for_params, params_sent, app, last_state)?;
+    handle_auth_state(
+      v,
+      ctx.client,
+      ctx.config,
+      ctx.waiting_for_params,
+      ctx.params_sent,
+      ctx.app,
+      ctx.last_state
+    )?;
     return Ok(());
   }
 
   if t == "updateNewMessage" {
     if let Some(message) = v.get("message") {
       if let Some((chat_id, msg)) = history_message_from_object(message) {
-        schedule_storage_index(app, chat_id, msg);
+        schedule_storage_index(ctx.app, chat_id, msg);
       }
     }
     return Ok(());
@@ -2586,7 +2611,7 @@ fn handle_tdlib_response(
     if chat_id != 0 && message_id != 0 {
       if let Some(content) = v.get("new_content") {
         let msg = history_message_from_content(message_id, Utc::now().timestamp(), content);
-        schedule_storage_index(app, chat_id, msg);
+        schedule_storage_index(ctx.app, chat_id, msg);
       }
     }
     return Ok(());
@@ -2599,10 +2624,10 @@ fn handle_tdlib_response(
         .and_then(|m| m.get("id"))
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-      if let Some(tx) = send_waiters.lock().remove(&old_id) {
+      if let Some(tx) = ctx.send_waiters.lock().remove(&old_id) {
         let _ = tx.send(Ok(new_id));
       } else {
-        let mut guard = send_results.lock();
+        let mut guard = ctx.send_results.lock();
         guard.insert(old_id, Ok(new_id));
         if guard.len() > 128 {
           guard.clear();
@@ -2620,10 +2645,10 @@ fn handle_tdlib_response(
         .and_then(|m| m.as_str())
         .unwrap_or("Не удалось отправить сообщение")
         .to_string();
-      if let Some(tx) = send_waiters.lock().remove(&old_id) {
+      if let Some(tx) = ctx.send_waiters.lock().remove(&old_id) {
         let _ = tx.send(Err(anyhow::anyhow!(err.clone())));
       } else {
-        let mut guard = send_results.lock();
+        let mut guard = ctx.send_results.lock();
         guard.insert(old_id, Err(err));
         if guard.len() > 128 {
           guard.clear();

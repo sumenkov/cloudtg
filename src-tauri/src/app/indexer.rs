@@ -1,5 +1,6 @@
 use chrono::Utc;
-use sqlx::{SqlitePool, Row};
+use crate::sqlx::{self, Row};
+use sqlx_sqlite::SqlitePool;
 use ulid::Ulid;
 use tokio::time::{sleep, Duration};
 
@@ -347,11 +348,9 @@ fn folder_hashtag(name: &str) -> Option<String> {
     if ch.is_alphanumeric() {
       out.push(ch);
       last_underscore = false;
-    } else if ch == '_' || ch.is_whitespace() || ch == '-' || ch == '.' {
-      if !last_underscore {
-        out.push('_');
-        last_underscore = true;
-      }
+    } else if (ch == '_' || ch.is_whitespace() || ch == '-' || ch == '.') && !last_underscore {
+      out.push('_');
+      last_underscore = true;
     }
   }
   let cleaned = out.trim_matches('_').to_string();

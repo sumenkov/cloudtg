@@ -1,4 +1,5 @@
-use sqlx::{SqlitePool, Row};
+use crate::sqlx::{self, Row};
+use sqlx_sqlite::SqlitePool;
 
 pub async fn get_tdlib_path(pool: &SqlitePool) -> anyhow::Result<Option<String>> {
   get_value(pool, "tdlib_path").await

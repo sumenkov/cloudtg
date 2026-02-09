@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305, XNonce};
-use rand_core::{OsRng, RngCore};
+use getrandom::fill as getrandom_fill;
 use serde::{Deserialize, Serialize};
 
 use crate::paths::Paths;
@@ -176,7 +176,7 @@ pub fn keychain_set(creds: &TgCredentials) -> anyhow::Result<()> {
 
 pub fn keychain_clear() -> anyhow::Result<()> {
   let entry = keychain_entry()?;
-  match entry.delete_password() {
+  match entry.delete_credential() {
     Ok(_) => Ok(()),
     Err(err) => {
       if is_keychain_missing(&err) {
@@ -216,14 +216,14 @@ fn env_api_hash() -> Option<String> {
 fn encrypt_payload(creds: &TgCredentials, password: &str) -> anyhow::Result<Vec<u8>> {
   let payload = serde_json::to_vec(creds)?;
   let mut salt = [0u8; 16];
-  OsRng.fill_bytes(&mut salt);
+  getrandom_fill(&mut salt).map_err(|e| anyhow::anyhow!("Не удалось получить случайные байты: {e}"))?;
   let mut key = [0u8; 32];
   argon2::Argon2::default()
     .hash_password_into(password.as_bytes(), &salt, &mut key)
     .map_err(|e| anyhow::anyhow!("Не удалось создать ключ шифрования: {e}"))?;
   let cipher = XChaCha20Poly1305::new((&key).into());
   let mut nonce = [0u8; 24];
-  OsRng.fill_bytes(&mut nonce);
+  getrandom_fill(&mut nonce).map_err(|e| anyhow::anyhow!("Не удалось получить случайные байты: {e}"))?;
   let ciphertext = cipher.encrypt(XNonce::from_slice(&nonce), payload.as_ref())
     .map_err(|_| anyhow::anyhow!("Не удалось зашифровать ключи"))?;
 

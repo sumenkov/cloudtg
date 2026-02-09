@@ -9,3 +9,4 @@ pub mod app;
 pub mod db;
 pub mod fsmeta;
 pub mod telegram;
+pub mod sqlx;

@@ -1,5 +1,5 @@
 use tempfile::tempdir;
-use sqlx::Row;
+use cloudtg_lib::sqlx::Row;
 
 #[tokio::test]
 async fn migrations_apply_and_basic_insert_works() -> anyhow::Result<()> {
@@ -10,13 +10,13 @@ async fn migrations_apply_and_basic_insert_works() -> anyhow::Result<()> {
   db.migrate().await?;
 
   let id = "01HTESTDIR";
-  sqlx::query("INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at) VALUES(?, NULL, ?, NULL, 0)")
+  cloudtg_lib::sqlx::query("INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at) VALUES(?, NULL, ?, NULL, 0)")
     .bind(id)
     .bind("Test")
     .execute(db.pool())
     .await?;
 
-  let row = sqlx::query("SELECT name FROM directories WHERE id = ?")
+  let row = cloudtg_lib::sqlx::query("SELECT name FROM directories WHERE id = ?")
     .bind(id)
     .fetch_one(db.pool())
     .await?;

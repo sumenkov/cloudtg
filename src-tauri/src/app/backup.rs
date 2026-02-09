@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use sqlx::SqlitePool;
+use crate::sqlx;
+use sqlx_sqlite::SqlitePool;
 
 use crate::db::Db;
 use crate::paths::Paths;

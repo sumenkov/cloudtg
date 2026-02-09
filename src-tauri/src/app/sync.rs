@@ -1,4 +1,5 @@
-use sqlx::{SqlitePool, Row};
+use crate::sqlx::{self, Row};
+use sqlx_sqlite::SqlitePool;
 
 pub async fn get_sync(pool: &SqlitePool, key: &str) -> anyhow::Result<Option<String>> {
   let row = sqlx::query("SELECT value FROM sync_state WHERE key = ?")

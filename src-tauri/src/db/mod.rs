@@ -1,11 +1,7 @@
 use std::path::PathBuf;
 
-use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
-use sqlx::migrate::Migrator;
-
-// NOTE: use the default migrations directory resolution (CARGO_MANIFEST_DIR/migrations)
-// to avoid the "paths relative to the current file's directory are not currently supported" error.
-static MIGRATOR: Migrator = sqlx::migrate!();
+use crate::sqlx::migrate::Migrator;
+use sqlx_sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool};
 
 #[derive(Clone)]
 pub struct Db {
@@ -17,7 +13,7 @@ impl Db {
     let opts = SqliteConnectOptions::new()
       .filename(path)
       .create_if_missing(true)
-      .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+      .journal_mode(SqliteJournalMode::Wal);
 
     let pool = SqlitePool::connect_with(opts).await?;
     Ok(Self { pool })
@@ -28,7 +24,10 @@ impl Db {
   }
 
   pub async fn migrate(&self) -> anyhow::Result<()> {
-    MIGRATOR.run(&self.pool).await?;
+    // Используем runtime-мигратор без macro-фичи sqlx.
+    let migrations_path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"));
+    let migrator = Migrator::new(migrations_path).await?;
+    migrator.run(&self.pool).await?;
     Ok(())
   }
 }

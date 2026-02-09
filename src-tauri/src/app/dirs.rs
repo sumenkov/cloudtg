@@ -1,5 +1,6 @@
 use chrono::Utc;
-use sqlx::{SqlitePool, Row};
+use crate::sqlx::{self, Row};
+use sqlx_sqlite::SqlitePool;
 use ulid::Ulid;
 
 use crate::fsmeta::{DirMeta, make_dir_message, parse_dir_message};
@@ -221,10 +222,8 @@ pub async fn list_tree(pool: &SqlitePool) -> anyhow::Result<DirNode> {
       if let (Some(parent), Some(child)) = (map.get_mut(pid), child) {
         parent.children.push(child);
       }
-    } else {
-      if let Some(child) = map.get(&it.id).cloned() {
-        root.children.push(child);
-      }
+    } else if let Some(child) = map.get(&it.id).cloned() {
+      root.children.push(child);
     }
   }
 

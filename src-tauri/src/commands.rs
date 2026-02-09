@@ -1,6 +1,7 @@
 use tauri::{Emitter, State, AppHandle};
 use std::path::{Path, PathBuf};
-use sqlx::Row;
+use crate::sqlx::{self, Row};
+use sqlx_sqlite::SqlitePool;
 use chrono::Utc;
 use serde::Deserialize;
 use crate::state::{AppState, AuthState};
@@ -129,11 +130,11 @@ async fn local_file_path(state: &AppState, file_id: &str) -> anyhow::Result<Opti
 fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
   #[cfg(target_os = "windows")]
   {
-    let path_str = path.to_string_lossy().to_string();
-    std::process::Command::new("cmd")
-      .args(["/C", "start", "", &path_str])
+    // Не используем `cmd /C start`, чтобы не допустить интерпретацию спецсимволов оболочкой.
+    std::process::Command::new("explorer")
+      .arg(path)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
   #[cfg(target_os = "macos")]
   {
@@ -141,14 +142,14 @@ fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
     std::process::Command::new("open")
       .arg(&path_str)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
   #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
   {
     std::process::Command::new("xdg-open")
       .arg(path)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
 }
 
@@ -158,21 +159,21 @@ fn open_url_in_os(url: &str) -> anyhow::Result<()> {
     std::process::Command::new("explorer")
       .arg(url)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
   #[cfg(target_os = "macos")]
   {
     std::process::Command::new("open")
       .arg(url)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
   #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
   {
     std::process::Command::new("xdg-open")
       .arg(url)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
 }
 
@@ -184,7 +185,7 @@ fn open_folder_for_file(path: &Path) -> anyhow::Result<()> {
     std::process::Command::new("explorer")
       .arg(&folder_str)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
   #[cfg(target_os = "macos")]
   {
@@ -192,14 +193,14 @@ fn open_folder_for_file(path: &Path) -> anyhow::Result<()> {
     std::process::Command::new("open")
       .arg(&folder_str)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
   #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
   {
     std::process::Command::new("xdg-open")
       .arg(folder)
       .spawn()?;
-    return Ok(());
+    Ok(())
   }
 }
 
@@ -579,11 +580,8 @@ pub async fn file_share_to_chat(state: State<'_, AppState>, file_id: String, cha
   let mut from_chat_id: i64 = row.get("tg_chat_id");
   let mut msg_id: i64 = row.get("tg_msg_id");
 
-  match tg.forward_message(from_chat_id, chat_id, msg_id).await {
-    Ok(_) => {
-      return Ok(ShareResult { message: "Сообщение переслано.".into() });
-    }
-    Err(_) => {}
+  if tg.forward_message(from_chat_id, chat_id, msg_id).await.is_ok() {
+    return Ok(ShareResult { message: "Сообщение переслано.".into() });
   }
 
   {
@@ -1100,7 +1098,7 @@ pub async fn settings_unlock_tg(state: State<'_, AppState>, password: String) ->
 }
 
 async fn reseed_storage_channel(
-  pool: &sqlx::SqlitePool,
+  pool: &SqlitePool,
   tg: &dyn crate::telegram::TelegramService,
   old_chat_id: Option<i64>,
   new_chat_id: i64
@@ -1158,7 +1156,7 @@ async fn reseed_storage_channel(
 }
 
 async fn flush_file_batch(
-  pool: &sqlx::SqlitePool,
+  pool: &SqlitePool,
   tg: &dyn crate::telegram::TelegramService,
   old_chat_id: Option<i64>,
   new_chat_id: i64,
