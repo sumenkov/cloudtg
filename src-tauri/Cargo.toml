@@ -32,6 +32,7 @@ thiserror = "2"
 ulid = "1"
 sqlx-core = { version = "0.8", default-features = false, features = ["_rt-tokio", "migrate", "chrono"] }
 sqlx-sqlite = { version = "0.8", default-features = false, features = ["migrate", "chrono", "bundled"] }
+sqlx = { version = "0.8", default-features = false, features = ["macros", "migrate"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

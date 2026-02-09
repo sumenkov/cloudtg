@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
-use crate::sqlx::migrate::Migrator;
 use sqlx_sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool};
+
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Clone)]
 pub struct Db {
@@ -24,10 +25,8 @@ impl Db {
   }
 
   pub async fn migrate(&self) -> anyhow::Result<()> {
-    // Используем runtime-мигратор без macro-фичи sqlx.
-    let migrations_path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"));
-    let migrator = Migrator::new(migrations_path).await?;
-    migrator.run(&self.pool).await?;
+    // Миграции встроены в бинарник на этапе сборки.
+    MIGRATOR.run(&self.pool).await?;
     Ok(())
   }
 }
