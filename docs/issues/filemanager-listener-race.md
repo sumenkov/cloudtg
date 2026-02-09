@@ -1,18 +1,19 @@
-# Issue: stale listener state window in FileManager
+# Проблема: устаревшее состояние окна слушателя в FileManager
 
-## Problem
-`FileManager` updated listener refs (`selectedNodeRef`, `isRootSelectedRef`, `reloadFilesRef`) inside a `useEffect`.
+## Проблема
+`FileManager` обновляет ссылки на слушатели (`selectedNodeRef`, `isRootSelectedRef`, `reloadFilesRef`) внутри `useEffect`.
 
-Because `useEffect` runs after paint, there is a small interval after a render where long-lived listeners (`tree_updated`, drag-and-drop `drop`) can still read values from the previous render. In practice, this can skip refreshes or apply uploads against an outdated folder selection when external events fire immediately after state changes.
+Поскольку `useEffect` выполняется после отрисовки, после рендеринга остается небольшой интервал, в течение которого долгоживущие слушатели (`tree_updated`, перетаскивание `drop`) могут считывать значения из предыдущего рендеринга. На практике это может привести к пропуску обновлений или применению загрузок к устаревшему выбору папки, когда внешние события срабатывают сразу после изменения состояния.
 
-## Fix
-Assign latest values to refs directly during render:
+
+## Исправление
+Присваивание последних значений ссылкам непосредственно во время рендеринга:
 - `selectedNodeRef.current = selectedNode`
 - `isRootSelectedRef.current = isRootSelected`
 - `reloadFilesRef.current = reloadFiles`
 
-This keeps listener reads synchronized with the current render, while preserving stable subscriptions.
+Это обеспечивает синхронизацию чтения слушателей с текущим рендерингом, сохраняя при этом стабильные подписки.
 
-## Verification
+## Проверка
 - `npm test`
 - `npm --workspace ui run build`
