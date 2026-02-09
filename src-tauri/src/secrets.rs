@@ -278,3 +278,96 @@ fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
   std::fs::rename(&tmp, path)?;
   Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  use tempfile::tempdir;
+
+  fn test_creds() -> TgCredentials {
+    TgCredentials {
+      api_id: 123456,
+      api_hash: "hash_value_123".to_string()
+    }
+  }
+
+  #[test]
+  fn normalize_credentials_validates_input() {
+    assert!(normalize_credentials(0, "hash".to_string()).is_err());
+    assert!(normalize_credentials(10, "   ".to_string()).is_err());
+
+    let normalized = normalize_credentials(10, "  abcdef  ".to_string()).expect("normalized");
+    assert_eq!(normalized.api_id, 10);
+    assert_eq!(normalized.api_hash, "abcdef");
+  }
+
+  #[test]
+  fn encrypt_and_decrypt_roundtrip() {
+    let creds = test_creds();
+    let encrypted = encrypt_payload(&creds, "pass123").expect("encrypt");
+    let decrypted = decrypt_payload(&encrypted, "pass123").expect("decrypt");
+    assert_eq!(decrypted.api_id, creds.api_id);
+    assert_eq!(decrypted.api_hash, creds.api_hash);
+  }
+
+  #[test]
+  fn decrypt_fails_with_wrong_password() {
+    let creds = test_creds();
+    let encrypted = encrypt_payload(&creds, "correct").expect("encrypt");
+    let err = decrypt_payload(&encrypted, "wrong").expect_err("must fail");
+    assert!(err.to_string().contains("Неверный пароль"));
+  }
+
+  #[test]
+  fn decrypt_rejects_unsupported_version() {
+    let payload = serde_json::json!({
+      "v": 2,
+      "salt": BASE64.encode([1u8; 16]),
+      "nonce": BASE64.encode([1u8; 24]),
+      "ciphertext": BASE64.encode([1u8; 16])
+    });
+    let bytes = serde_json::to_vec(&payload).expect("to vec");
+    let err = decrypt_payload(&bytes, "pass").expect_err("must fail");
+    assert!(err.to_string().contains("Неподдерживаемая версия"));
+  }
+
+  #[test]
+  fn decrypt_rejects_invalid_nonce_length() {
+    let payload = serde_json::json!({
+      "v": 1,
+      "salt": BASE64.encode([1u8; 16]),
+      "nonce": BASE64.encode([1u8; 8]),
+      "ciphertext": BASE64.encode([1u8; 16])
+    });
+    let bytes = serde_json::to_vec(&payload).expect("to vec");
+    let err = decrypt_payload(&bytes, "pass").expect_err("must fail");
+    assert!(err.to_string().contains("Некорректная длина nonce"));
+  }
+
+  #[test]
+  fn encrypted_save_load_and_clear_roundtrip() {
+    let tmp = tempdir().expect("tempdir");
+    let paths = Paths::from_base(tmp.path().to_path_buf());
+    let creds = test_creds();
+
+    encrypted_save(&paths, &creds, "test-pass").expect("save");
+    assert!(encrypted_exists(&paths));
+
+    let loaded = encrypted_load(&paths, "test-pass").expect("load");
+    assert_eq!(loaded.api_id, creds.api_id);
+    assert_eq!(loaded.api_hash, creds.api_hash);
+
+    encrypted_clear(&paths).expect("clear");
+    assert!(!encrypted_exists(&paths));
+  }
+
+  #[test]
+  fn encrypted_save_requires_non_empty_password() {
+    let tmp = tempdir().expect("tempdir");
+    let paths = Paths::from_base(tmp.path().to_path_buf());
+    let creds = test_creds();
+    let err = encrypted_save(&paths, &creds, "   ").expect_err("must fail");
+    assert!(err.to_string().contains("Нужен пароль"));
+  }
+}

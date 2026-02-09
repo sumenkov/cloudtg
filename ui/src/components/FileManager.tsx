@@ -7,6 +7,7 @@ import { TreePanel } from "./file-manager/TreePanel";
 import { SearchPanel } from "./file-manager/SearchPanel";
 import { SharePanel } from "./file-manager/SharePanel";
 import { FileList } from "./file-manager/FileList";
+import { handleDownloadAction, handleOpenAction, handleOpenFolderAction } from "./file-manager/fileActions";
 
 function containsNode(root: DirNode, id: string): boolean {
   if (root.id === id) return true;
@@ -668,29 +669,33 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                 }}
                 onDownload={async (file) => {
                   try {
-                    let overwrite = false;
-                    if (file.is_downloaded) {
-                      const ok = window.confirm("Файл уже скачан. Перезаписать локальную копию?");
-                      if (!ok) return;
-                      overwrite = true;
-                    }
-                    await downloadFile(file.id, overwrite);
-                    await reloadFiles();
+                    await handleDownloadAction({
+                      file,
+                      confirm: (message) => window.confirm(message),
+                      downloadFile,
+                      reloadFiles
+                    });
                   } catch (e: any) {
                     setError(String(e));
                   }
                 }}
                 onOpen={async (file) => {
                   try {
-                    await openFile(file.id);
-                    await reloadFiles();
+                    await handleOpenAction({
+                      file,
+                      openFile,
+                      reloadFiles
+                    });
                   } catch (e: any) {
                     setError(String(e));
                   }
                 }}
                 onOpenFolder={async (file) => {
                   try {
-                    await openFileFolder(file.id);
+                    await handleOpenFolderAction({
+                      file,
+                      openFileFolder
+                    });
                   } catch (e: any) {
                     setError(String(e));
                   }

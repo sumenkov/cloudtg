@@ -84,6 +84,21 @@ impl AppState {
     inner.tg_credentials_source = None;
   }
 
+  #[cfg(test)]
+  pub fn set_paths_for_tests(&self, paths: Paths) {
+    self.inner.write().paths = Some(paths);
+  }
+
+  #[cfg(test)]
+  pub fn set_db_for_tests(&self, db: Db) {
+    self.inner.write().db = Some(db);
+  }
+
+  #[cfg(test)]
+  pub fn set_telegram_for_tests(&self, telegram: Arc<dyn TelegramService>) {
+    self.inner.write().telegram = Some(telegram);
+  }
+
   pub fn spawn_init(&self, app: AppHandle) {
     let state = self.clone();
     tauri::async_runtime::spawn(async move {

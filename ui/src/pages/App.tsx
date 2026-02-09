@@ -4,6 +4,12 @@ import { useAppStore } from "../store/app";
 import { FileManager } from "../components/FileManager";
 import { Login } from "../components/Login";
 import { Settings } from "../components/Settings";
+import {
+  createAuthStateChangedHandler,
+  createListenerRegistrar,
+  disposeListeners,
+  runSyncOnce
+} from "./appLifecycle";
 
 export default function App() {
   const {
@@ -32,62 +38,43 @@ export default function App() {
     tgSync.total && tgSync.total > 0 ? Math.max(0, Math.min(100, Math.floor((tgSync.processed / tgSync.total) * 100))) : null;
 
   useEffect(() => {
-    let disposed = false;
+    const disposedRef = { current: false };
     const unlisteners: Array<() => void> = [];
-    const addListener = async <T,>(event: string, handler: (event: { payload: T }) => Promise<void>) => {
-      const unlisten = await listenSafe<T>(event, handler as any);
-      // Эффект может размонтироваться до завершения async-подписки (например, в React.StrictMode).
-      if (disposed) {
-        unlisten();
-        return;
-      }
-      unlisteners.push(unlisten);
-    };
+    const addListener = createListenerRegistrar(listenSafe, disposedRef, unlisteners);
 
     (async () => {
       try {
         const state = await refreshAuth();
-        if (disposed) return;
+        if (disposedRef.current) return;
         await refreshSettings();
-        if (disposed) return;
+        if (disposedRef.current) return;
         await refreshTree();
-        if (disposed) return;
+        if (disposedRef.current) return;
 
-        if (state === "ready" && !syncStartedRef.current) {
-          syncStartedRef.current = true;
-          try {
-            await invokeSafe("tg_sync_storage");
-            await invokeSafe("tg_reconcile_recent", { limit: 100 });
-            await refreshTree();
-          } catch (e: any) {
-            if (!disposed) {
-              setError(String(e));
-            }
-          }
+        if (state === "ready") {
+          await runSyncOnce({
+            syncStartedRef,
+            invoke: invokeSafe,
+            refreshTree,
+            setError,
+            disposedRef
+          });
         }
 
-        await addListener<{ state: string }>("auth_state_changed", async (event) => {
-          if (disposed) return;
-          setAuth(event.payload.state);
-          if (event.payload.state === "ready") {
-            await refreshTree();
-            if (!syncStartedRef.current) {
-              syncStartedRef.current = true;
-              try {
-                await invokeSafe("tg_sync_storage");
-                await invokeSafe("tg_reconcile_recent", { limit: 100 });
-                await refreshTree();
-              } catch (e: any) {
-                if (!disposed) {
-                  setError(String(e));
-                }
-              }
-            }
-          }
-        });
+        await addListener(
+          "auth_state_changed",
+          createAuthStateChangedHandler({
+            disposedRef,
+            syncStartedRef,
+            setAuth,
+            refreshTree,
+            invoke: invokeSafe,
+            setError
+          })
+        );
 
         await addListener<{ state: string; message: string; detail?: string | null }>("tdlib_build_status", async (event) => {
-          if (disposed) return;
+          if (disposedRef.current) return;
           if (event.payload.state === "start") {
             clearTdlibLogs();
           }
@@ -100,13 +87,13 @@ export default function App() {
         });
 
         await addListener<{ stream: "stdout" | "stderr"; line: string }>("tdlib_build_log", async (event) => {
-          if (disposed) return;
+          if (disposedRef.current) return;
           touchTdlibBuildOnLog();
           pushTdlibLog(event.payload.stream, event.payload.line);
         });
 
         await addListener<{ state: string; message: string; processed: number; total: number | null }>("tg_sync_status", async (event) => {
-          if (disposed) return;
+          if (disposedRef.current) return;
           setTgSync({
             state: event.payload.state ?? null,
             message: event.payload.message ?? null,
@@ -116,19 +103,18 @@ export default function App() {
         });
 
         await addListener<unknown>("tree_updated", async () => {
-          if (disposed) return;
+          if (disposedRef.current) return;
           await refreshTree();
         });
       } catch (e: any) {
-        if (!disposed) {
+        if (!disposedRef.current) {
           setError(String(e));
         }
       }
     })();
 
     return () => {
-      disposed = true;
-      unlisteners.forEach((fn) => fn());
+      disposeListeners(disposedRef, unlisteners);
     };
   }, [
     refreshAuth,

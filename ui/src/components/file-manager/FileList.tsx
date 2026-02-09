@@ -1,5 +1,6 @@
 import React from "react";
 import type { FileItem } from "../../store/app";
+import { displayFileSizeBytes, shouldShowOpenFolderButton } from "./fileActions";
 
 type FileListProps = {
   files: FileItem[];
@@ -32,7 +33,7 @@ export function FileList({
         <div>
           {files.map((file) => {
             const checked = selectedFiles.has(file.id);
-            const displaySize = file.is_downloaded ? (file.local_size ?? 0) : 0;
+            const displaySize = displayFileSizeBytes(file);
             return (
               <div
                 key={file.id}
@@ -85,7 +86,7 @@ export function FileList({
                   >
                     Открыть
                   </button>
-                  {file.is_downloaded ? (
+                  {shouldShowOpenFolderButton(file) ? (
                     <button
                       onClick={() => void onOpenFolder(file)}
                       style={{ padding: "6px 10px", borderRadius: 8 }}

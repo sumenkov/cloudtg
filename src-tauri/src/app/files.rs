@@ -969,8 +969,299 @@ fn cleanup_empty_dirs(root: PathBuf, start: Option<&Path>) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::collections::HashMap;
   use std::io::Write;
+  use std::sync::{Arc, Mutex};
   use tempfile::tempdir;
+  use crate::db::Db;
+  use crate::sqlx;
+  use crate::telegram::{
+    ChatId,
+    ChatInfo,
+    HistoryMessage,
+    MessageId,
+    SearchMessagesResult,
+    TelegramService,
+    TgError,
+    UploadedMessage
+  };
+
+  #[derive(Clone, Default)]
+  struct MockTelegram {
+    state: Arc<Mutex<MockTelegramState>>
+  }
+
+  #[derive(Default)]
+  struct MockTelegramState {
+    download_attempts: Vec<(ChatId, MessageId, PathBuf)>,
+    fail_once_for: Option<(ChatId, MessageId)>,
+    failed_once: bool,
+    download_payloads: HashMap<(ChatId, MessageId), Vec<u8>>,
+    search_results: HashMap<(ChatId, String, MessageId), SearchMessagesResult>
+  }
+
+  impl MockTelegram {
+    fn with_payload(self, chat_id: ChatId, message_id: MessageId, payload: &[u8]) -> Self {
+      let mut guard = self.state.lock().expect("mock lock");
+      guard.download_payloads.insert((chat_id, message_id), payload.to_vec());
+      drop(guard);
+      self
+    }
+
+    fn fail_once(self, chat_id: ChatId, message_id: MessageId) -> Self {
+      let mut guard = self.state.lock().expect("mock lock");
+      guard.fail_once_for = Some((chat_id, message_id));
+      drop(guard);
+      self
+    }
+
+    fn with_search_result(
+      self,
+      chat_id: ChatId,
+      query: String,
+      from_message_id: MessageId,
+      result: SearchMessagesResult
+    ) -> Self {
+      let mut guard = self.state.lock().expect("mock lock");
+      guard.search_results.insert((chat_id, query, from_message_id), result);
+      drop(guard);
+      self
+    }
+
+    fn download_attempts(&self) -> Vec<(ChatId, MessageId)> {
+      let guard = self.state.lock().expect("mock lock");
+      guard
+        .download_attempts
+        .iter()
+        .map(|(chat_id, message_id, _)| (*chat_id, *message_id))
+        .collect()
+    }
+  }
+
+  #[async_trait::async_trait]
+  impl TelegramService for MockTelegram {
+    async fn auth_start(&self, _phone: String) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn auth_submit_code(&self, _code: String) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn auth_submit_password(&self, _password: String) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn configure(&self, _api_id: i32, _api_hash: String, _tdlib_path: Option<String>) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn storage_check_channel(&self, _chat_id: ChatId) -> Result<bool, TgError> {
+      Ok(false)
+    }
+
+    async fn storage_get_or_create_channel(&self) -> Result<ChatId, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn storage_create_channel(&self) -> Result<ChatId, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn storage_delete_channel(&self, _chat_id: ChatId) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn backup_check_channel(&self, _chat_id: ChatId) -> Result<bool, TgError> {
+      Ok(false)
+    }
+
+    async fn backup_get_or_create_channel(&self) -> Result<ChatId, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn chat_history(
+      &self,
+      _chat_id: ChatId,
+      _from_message_id: MessageId,
+      _limit: i32
+    ) -> Result<SearchMessagesResult, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn search_chat_messages(
+      &self,
+      chat_id: ChatId,
+      query: String,
+      from_message_id: MessageId,
+      _limit: i32
+    ) -> Result<SearchMessagesResult, TgError> {
+      let guard = self.state.lock().expect("mock lock");
+      Ok(guard
+        .search_results
+        .get(&(chat_id, query, from_message_id))
+        .cloned()
+        .unwrap_or(SearchMessagesResult {
+          total_count: Some(0),
+          next_from_message_id: 0,
+          messages: Vec::new()
+        }))
+    }
+
+    async fn search_storage_messages(
+      &self,
+      _chat_id: ChatId,
+      _from_message_id: MessageId,
+      _limit: i32
+    ) -> Result<SearchMessagesResult, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn search_chats(&self, _query: String, _limit: i32) -> Result<Vec<ChatInfo>, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn recent_chats(&self, _limit: i32) -> Result<Vec<ChatInfo>, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn send_text_message(&self, _chat_id: ChatId, _text: String) -> Result<UploadedMessage, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn send_dir_message(&self, _chat_id: ChatId, _text: String) -> Result<UploadedMessage, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn edit_message_text(&self, _chat_id: ChatId, _message_id: MessageId, _text: String) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn edit_message_caption(
+      &self,
+      _chat_id: ChatId,
+      _message_id: MessageId,
+      _caption: String
+    ) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn send_file(
+      &self,
+      _chat_id: ChatId,
+      _path: PathBuf,
+      _caption: String
+    ) -> Result<UploadedMessage, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn send_file_from_message(
+      &self,
+      _chat_id: ChatId,
+      _message_id: MessageId,
+      _caption: String
+    ) -> Result<UploadedMessage, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn forward_message(
+      &self,
+      _from_chat_id: ChatId,
+      _to_chat_id: ChatId,
+      _message_id: MessageId
+    ) -> Result<MessageId, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn copy_messages(
+      &self,
+      _from_chat_id: ChatId,
+      _to_chat_id: ChatId,
+      _message_ids: Vec<MessageId>
+    ) -> Result<Vec<Option<MessageId>>, TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn delete_messages(
+      &self,
+      _chat_id: ChatId,
+      _message_ids: Vec<MessageId>,
+      _revoke: bool
+    ) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn download_message_file(
+      &self,
+      chat_id: ChatId,
+      message_id: MessageId,
+      target: PathBuf
+    ) -> Result<PathBuf, TgError> {
+      let mut guard = self.state.lock().expect("mock lock");
+      guard.download_attempts.push((chat_id, message_id, target.clone()));
+      if guard.fail_once_for == Some((chat_id, message_id)) && !guard.failed_once {
+        guard.failed_once = true;
+        return Err(TgError::Other("download failed".to_string()));
+      }
+      let Some(payload) = guard.download_payloads.get(&(chat_id, message_id)).cloned() else {
+        return Err(TgError::Other("no payload rule".to_string()));
+      };
+      drop(guard);
+
+      if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(TgError::Io)?;
+      }
+      std::fs::write(&target, payload).map_err(TgError::Io)?;
+      Ok(target)
+    }
+
+    async fn message_exists(&self, _chat_id: ChatId, _message_id: MessageId) -> Result<bool, TgError> {
+      Ok(false)
+    }
+  }
+
+  async fn setup_db_and_paths() -> anyhow::Result<(tempfile::TempDir, Db, Paths)> {
+    let tmp = tempdir()?;
+    let paths = Paths::from_base(tmp.path().to_path_buf());
+    paths.ensure_dirs()?;
+    let db = Db::connect(tmp.path().join("test.sqlite")).await?;
+    db.migrate().await?;
+    Ok((tmp, db, paths))
+  }
+
+  async fn seed_one_file(
+    pool: &SqlitePool,
+    file_id: &str,
+    dir_id: &str,
+    name: &str,
+    size: i64,
+    tg_chat_id: i64,
+    tg_msg_id: i64
+  ) -> anyhow::Result<()> {
+    sqlx::query(
+      "INSERT INTO directories(id, parent_id, name, tg_msg_id, updated_at, is_broken) VALUES(?, NULL, ?, NULL, 0, 0)"
+    )
+      .bind(dir_id)
+      .bind("Документы")
+      .execute(pool)
+      .await?;
+
+    sqlx::query(
+      "INSERT INTO files(id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken)
+       VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0)"
+    )
+      .bind(file_id)
+      .bind(dir_id)
+      .bind(name)
+      .bind(size)
+      .bind("deadbeef")
+      .bind(tg_chat_id)
+      .bind(tg_msg_id)
+      .execute(pool)
+      .await?;
+
+    Ok(())
+  }
 
   #[test]
   fn find_local_download_returns_existing_when_size_unknown() {
@@ -1029,5 +1320,97 @@ mod tests {
   fn sanitize_component_replaces_forbidden_chars() {
     assert_eq!(sanitize_component("a/b\\c:d"), "a_b_c_d");
     assert_eq!(sanitize_component("name\0with\rbad\nchars"), "name_with_bad_chars");
+  }
+
+  #[tokio::test]
+  async fn download_file_returns_existing_without_redownload_when_overwrite_disabled() -> anyhow::Result<()> {
+    let (_tmp, db, paths) = setup_db_and_paths().await?;
+    seed_one_file(db.pool(), "f1", "d1", "report.txt", 0, -1001, 100).await?;
+
+    let existing_dir = paths.cache_dir.join("downloads").join("Документы");
+    std::fs::create_dir_all(&existing_dir)?;
+    let existing_path = existing_dir.join("report.txt");
+    std::fs::write(&existing_path, b"cached")?;
+
+    let tg = MockTelegram::default();
+    let out = download_file(db.pool(), &tg, &paths, -2002, "f1", false).await?;
+
+    assert_eq!(out, existing_path);
+    assert_eq!(tg.download_attempts().len(), 0);
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn download_file_overwrite_redownloads_and_updates_size() -> anyhow::Result<()> {
+    let (_tmp, db, paths) = setup_db_and_paths().await?;
+    seed_one_file(db.pool(), "f2", "d2", "video.mp4", 6, -3001, 200).await?;
+
+    let existing_dir = paths.cache_dir.join("downloads").join("Документы");
+    std::fs::create_dir_all(&existing_dir)?;
+    let existing_path = existing_dir.join("video.mp4");
+    std::fs::write(&existing_path, b"oldold")?;
+
+    let tg = MockTelegram::default().with_payload(-3001, 200, b"new payload bytes");
+    let out = download_file(db.pool(), &tg, &paths, -3001, "f2", true).await?;
+
+    assert_eq!(out, existing_path);
+    assert_eq!(std::fs::read(&out)?, b"new payload bytes");
+    assert_eq!(tg.download_attempts(), vec![(-3001, 200)]);
+
+    let row = sqlx::query("SELECT size FROM files WHERE id = ?")
+      .bind("f2")
+      .fetch_one(db.pool())
+      .await?;
+    let size: i64 = row.get("size");
+    assert_eq!(size, "new payload bytes".len() as i64);
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn download_file_fallback_finds_new_message_and_updates_db() -> anyhow::Result<()> {
+    let (_tmp, db, paths) = setup_db_and_paths().await?;
+    let file_id = "f3";
+    seed_one_file(db.pool(), file_id, "d3", "archive.zip", 0, -4001, 300).await?;
+
+    let caption = make_file_caption(&FileMeta {
+      dir_id: "d3".to_string(),
+      file_id: file_id.to_string(),
+      name: "archive.zip".to_string(),
+      hash_short: "deadbeef".to_string()
+    });
+    let query = format!("f={file_id}");
+    let search_hit = SearchMessagesResult {
+      total_count: Some(1),
+      next_from_message_id: 0,
+      messages: vec![HistoryMessage {
+        id: 555,
+        date: 0,
+        text: None,
+        caption: Some(caption),
+        file_size: Some(0),
+        file_name: Some("archive.zip".to_string())
+      }]
+    };
+
+    let tg = MockTelegram::default()
+      .fail_once(-4001, 300)
+      .with_payload(-5002, 555, b"fallback payload")
+      .with_search_result(-5002, query, 0, search_hit);
+
+    let out = download_file(db.pool(), &tg, &paths, -5002, file_id, false).await?;
+    assert_eq!(std::fs::read(&out)?, b"fallback payload");
+    assert_eq!(tg.download_attempts(), vec![(-4001, 300), (-5002, 555)]);
+
+    let row = sqlx::query("SELECT tg_chat_id, tg_msg_id, size FROM files WHERE id = ?")
+      .bind(file_id)
+      .fetch_one(db.pool())
+      .await?;
+    let chat_id: i64 = row.get("tg_chat_id");
+    let msg_id: i64 = row.get("tg_msg_id");
+    let size: i64 = row.get("size");
+    assert_eq!(chat_id, -5002);
+    assert_eq!(msg_id, 555);
+    assert_eq!(size, "fallback payload".len() as i64);
+    Ok(())
   }
 }
