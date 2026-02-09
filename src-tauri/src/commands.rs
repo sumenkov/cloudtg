@@ -112,12 +112,18 @@ fn emit_sync(app: &AppHandle, state: &str, message: &str, processed: i64, total:
   let _ = app.emit("tg_sync_status", payload);
 }
 
-async fn download_file_path(state: &AppState, file_id: &str) -> anyhow::Result<PathBuf> {
+async fn download_file_path(state: &AppState, file_id: &str, overwrite: bool) -> anyhow::Result<PathBuf> {
   let db = state.db()?;
   let tg = state.telegram()?;
   let paths = state.paths()?;
   let storage_chat_id = ensure_storage_chat_id(state).await?;
-  files::download_file(db.pool(), tg.as_ref(), &paths, storage_chat_id, file_id).await
+  files::download_file(db.pool(), tg.as_ref(), &paths, storage_chat_id, file_id, overwrite).await
+}
+
+async fn local_file_path(state: &AppState, file_id: &str) -> anyhow::Result<Option<PathBuf>> {
+  let db = state.db()?;
+  let paths = state.paths()?;
+  files::find_local_download_path(db.pool(), &paths, file_id).await
 }
 
 fn open_file_in_os(path: &Path) -> anyhow::Result<()> {
@@ -171,26 +177,25 @@ fn open_url_in_os(url: &str) -> anyhow::Result<()> {
 }
 
 fn open_folder_for_file(path: &Path) -> anyhow::Result<()> {
+  let folder = path.parent().unwrap_or_else(|| Path::new("."));
   #[cfg(target_os = "windows")]
   {
-    let path_str = path.to_string_lossy().to_string();
+    let folder_str = folder.to_string_lossy().to_string();
     std::process::Command::new("explorer")
-      .arg(format!("/select,{path_str}"))
+      .arg(&folder_str)
       .spawn()?;
     return Ok(());
   }
   #[cfg(target_os = "macos")]
   {
-    let path_str = path.to_string_lossy().to_string();
+    let folder_str = folder.to_string_lossy().to_string();
     std::process::Command::new("open")
-      .arg("-R")
-      .arg(&path_str)
+      .arg(&folder_str)
       .spawn()?;
     return Ok(());
   }
   #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
   {
-    let folder = path.parent().unwrap_or_else(|| Path::new("."));
     std::process::Command::new("xdg-open")
       .arg(folder)
       .spawn()?;
@@ -393,14 +398,17 @@ pub async fn dir_list_tree(state: State<'_, AppState>) -> Result<crate::app::mod
 #[tauri::command]
 pub async fn file_list(state: State<'_, AppState>, dir_id: String) -> Result<Vec<files::FileItem>, String> {
   let db = state.db().map_err(map_err)?;
-  files::list_files(db.pool(), &dir_id).await.map_err(map_err)
+  let paths = state.paths().map_err(map_err)?;
+  files::list_files(db.pool(), &paths, &dir_id).await.map_err(map_err)
 }
 
 #[tauri::command]
 pub async fn file_search(state: State<'_, AppState>, input: FileSearchInput) -> Result<Vec<files::FileItem>, String> {
   let db = state.db().map_err(map_err)?;
+  let paths = state.paths().map_err(map_err)?;
   files::search_files(
     db.pool(),
+    &paths,
     input.dir_id.as_deref(),
     input.name.as_deref(),
     input.file_type.as_deref(),
@@ -485,22 +493,27 @@ pub async fn file_delete_many(state: State<'_, AppState>, file_ids: Vec<String>)
 }
 
 #[tauri::command]
-pub async fn file_download(state: State<'_, AppState>, file_id: String) -> Result<String, String> {
+pub async fn file_download(state: State<'_, AppState>, file_id: String, overwrite: Option<bool>) -> Result<String, String> {
   info!(event = "file_download", file_id = file_id.as_str(), "Скачивание файла");
-  let path = download_file_path(&state, &file_id).await.map_err(map_err)?;
+  let path = download_file_path(&state, &file_id, overwrite.unwrap_or(false)).await.map_err(map_err)?;
   Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
 pub async fn file_open(state: State<'_, AppState>, file_id: String) -> Result<(), String> {
-  let path = download_file_path(&state, &file_id).await.map_err(map_err)?;
+  let path = match local_file_path(&state, &file_id).await.map_err(map_err)? {
+    Some(path) => path,
+    None => download_file_path(&state, &file_id, false).await.map_err(map_err)?
+  };
   open_file_in_os(&path).map_err(map_err)?;
   Ok(())
 }
 
 #[tauri::command]
 pub async fn file_open_folder(state: State<'_, AppState>, file_id: String) -> Result<(), String> {
-  let path = download_file_path(&state, &file_id).await.map_err(map_err)?;
+  let Some(path) = local_file_path(&state, &file_id).await.map_err(map_err)? else {
+    return Err("Файл еще не скачан.".to_string());
+  };
   open_folder_for_file(&path).map_err(map_err)?;
   Ok(())
 }

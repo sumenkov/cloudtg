@@ -1,6 +1,7 @@
 use chrono::Utc;
 use sqlx::{SqlitePool, Row, QueryBuilder};
 use ulid::Ulid;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::fsmeta::{FileMeta, make_file_caption, parse_file_caption};
@@ -32,6 +33,8 @@ pub struct FileItem {
   pub dir_id: String,
   pub name: String,
   pub size: i64,
+  pub local_size: Option<i64>,
+  pub is_downloaded: bool,
   pub hash: String,
   pub tg_chat_id: i64,
   pub tg_msg_id: i64,
@@ -45,7 +48,7 @@ pub enum RepairFileResult {
   NeedFile
 }
 
-pub async fn list_files(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Vec<FileItem>> {
+pub async fn list_files(pool: &SqlitePool, paths: &Paths, dir_id: &str) -> anyhow::Result<Vec<FileItem>> {
   let rows = sqlx::query(
     "SELECT id, dir_id, name, size, hash, tg_chat_id, tg_msg_id, created_at, is_broken FROM files WHERE dir_id = ? ORDER BY name"
   )
@@ -53,13 +56,19 @@ pub async fn list_files(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Vec<F
     .fetch_all(pool)
     .await?;
 
+  let dir_path = build_dir_path(pool, dir_id).await?;
   let mut out = Vec::with_capacity(rows.len());
   for row in rows {
+    let name: String = row.get("name");
+    let size: i64 = row.get("size");
+    let (is_downloaded, local_size) = local_download_info(paths, &dir_path, &name, size);
     out.push(FileItem {
       id: row.get::<String,_>("id"),
       dir_id: row.get::<String,_>("dir_id"),
-      name: row.get::<String,_>("name"),
-      size: row.get::<i64,_>("size"),
+      name,
+      size,
+      local_size,
+      is_downloaded,
       hash: row.get::<String,_>("hash"),
       tg_chat_id: row.get::<i64,_>("tg_chat_id"),
       tg_msg_id: row.get::<i64,_>("tg_msg_id"),
@@ -72,6 +81,7 @@ pub async fn list_files(pool: &SqlitePool, dir_id: &str) -> anyhow::Result<Vec<F
 
 pub async fn search_files(
   pool: &SqlitePool,
+  paths: &Paths,
   dir_id: Option<&str>,
   name: Option<&str>,
   file_type: Option<&str>,
@@ -113,12 +123,26 @@ pub async fn search_files(
 
   let rows = builder.build().fetch_all(pool).await?;
   let mut out = Vec::with_capacity(rows.len());
+  let mut dir_paths: HashMap<String, PathBuf> = HashMap::new();
   for row in rows {
+    let dir_id: String = row.get("dir_id");
+    let name: String = row.get("name");
+    let size: i64 = row.get("size");
+    let dir_path = if let Some(cached) = dir_paths.get(&dir_id) {
+      cached.clone()
+    } else {
+      let built = build_dir_path(pool, &dir_id).await?;
+      dir_paths.insert(dir_id.clone(), built.clone());
+      built
+    };
+    let (is_downloaded, local_size) = local_download_info(paths, &dir_path, &name, size);
     out.push(FileItem {
       id: row.get::<String,_>("id"),
-      dir_id: row.get::<String,_>("dir_id"),
-      name: row.get::<String,_>("name"),
-      size: row.get::<i64,_>("size"),
+      dir_id,
+      name,
+      size,
+      local_size,
+      is_downloaded,
       hash: row.get::<String,_>("hash"),
       tg_chat_id: row.get::<i64,_>("tg_chat_id"),
       tg_msg_id: row.get::<i64,_>("tg_msg_id"),
@@ -421,7 +445,8 @@ pub async fn download_file(
   tg: &dyn TelegramService,
   paths: &Paths,
   storage_chat_id: ChatId,
-  file_id: &str
+  file_id: &str,
+  overwrite: bool
 ) -> anyhow::Result<PathBuf> {
   let row = sqlx::query("SELECT id, dir_id, name, size, tg_chat_id, tg_msg_id FROM files WHERE id = ?")
     .bind(file_id)
@@ -437,15 +462,28 @@ pub async fn download_file(
   let mut msg_id: i64 = row.get("tg_msg_id");
 
   let dir_path = build_dir_path(pool, &dir_id).await?;
-  let base_dir = paths.cache_dir.join("downloads").join(dir_path);
+  let base_dir = paths.cache_dir.join("downloads").join(&dir_path);
   std::fs::create_dir_all(&base_dir)?;
-  let target_path = resolve_target_path(&base_dir, &name, size)?;
-  if target_path.exists() {
-    return Ok(target_path);
+  let existing = find_local_download(paths, &dir_path, &name, size);
+  if let Some(existing_path) = existing.clone() {
+    if !overwrite {
+      return Ok(existing_path);
+    }
+  }
+  let target_path = if overwrite {
+    existing.unwrap_or_else(|| preferred_target_path(&base_dir, &name))
+  } else {
+    resolve_target_path(&base_dir, &name, size)?
+  };
+  if overwrite && target_path.exists() {
+    let _ = std::fs::remove_file(&target_path);
   }
 
   match tg.download_message_file(msg_chat_id, msg_id, target_path.clone()).await {
-    Ok(path) => return Ok(path),
+    Ok(path) => {
+      update_file_size_from_local(pool, file_id, &path).await?;
+      return Ok(path);
+    }
     Err(_) => {}
   }
 
@@ -465,7 +503,23 @@ pub async fn download_file(
   }
 
   let path = tg.download_message_file(msg_chat_id, msg_id, target_path.clone()).await?;
+  update_file_size_from_local(pool, file_id, &path).await?;
   Ok(path)
+}
+
+pub async fn find_local_download_path(pool: &SqlitePool, paths: &Paths, file_id: &str) -> anyhow::Result<Option<PathBuf>> {
+  let row = sqlx::query("SELECT dir_id, name, size FROM files WHERE id = ?")
+    .bind(file_id)
+    .fetch_optional(pool)
+    .await?;
+  let Some(row) = row else {
+    return Err(anyhow::anyhow!("Файл не найден"));
+  };
+  let dir_id: String = row.get("dir_id");
+  let name: String = row.get("name");
+  let size: i64 = row.get("size");
+  let dir_path = build_dir_path(pool, &dir_id).await?;
+  Ok(find_local_download(paths, &dir_path, &name, size))
 }
 
 pub async fn repair_file(
@@ -681,6 +735,14 @@ fn resolve_target_path(base_dir: &Path, name: &str, size: i64) -> anyhow::Result
   Ok(candidate)
 }
 
+fn preferred_target_path(base_dir: &Path, name: &str) -> PathBuf {
+  let mut safe = sanitize_component(name);
+  if safe.is_empty() {
+    safe = "файл".to_string();
+  }
+  base_dir.join(safe)
+}
+
 fn split_name(name: &str) -> (String, String) {
   if let Some(pos) = name.rfind('.') {
     if pos > 0 {
@@ -720,6 +782,7 @@ fn find_local_download(paths: &Paths, dir_path: &Path, name: &str, size: i64) ->
   let (stem, ext) = split_name(&safe);
 
   let entries = std::fs::read_dir(&base_dir).ok()?;
+  let mut first_match: Option<PathBuf> = None;
   for entry in entries.flatten() {
     let path = entry.path();
     if !path.is_file() {
@@ -731,6 +794,9 @@ fn find_local_download(paths: &Paths, dir_path: &Path, name: &str, size: i64) ->
     if cand_ext != ext || !is_name_variant(&stem, &cand_stem) {
       continue;
     }
+    if first_match.is_none() {
+      first_match = Some(path.clone());
+    }
     if size > 0 {
       if let Ok(meta) = std::fs::metadata(&path) {
         if meta.len() as i64 != size {
@@ -740,7 +806,32 @@ fn find_local_download(paths: &Paths, dir_path: &Path, name: &str, size: i64) ->
     }
     return Some(path);
   }
-  None
+  first_match
+}
+
+fn local_download_info(paths: &Paths, dir_path: &Path, name: &str, size: i64) -> (bool, Option<i64>) {
+  let Some(path) = find_local_download(paths, dir_path, name, size) else {
+    return (false, None);
+  };
+  let local_size = std::fs::metadata(&path)
+    .ok()
+    .map(|meta| meta.len().min(i64::MAX as u64) as i64);
+  (true, local_size)
+}
+
+async fn update_file_size_from_local(pool: &SqlitePool, file_id: &str, path: &Path) -> anyhow::Result<()> {
+  let local_size = std::fs::metadata(path)
+    .map(|meta| meta.len().min(i64::MAX as u64) as i64)
+    .unwrap_or(0);
+  if local_size <= 0 {
+    return Ok(());
+  }
+  sqlx::query("UPDATE files SET size = ? WHERE id = ?")
+    .bind(local_size)
+    .bind(file_id)
+    .execute(pool)
+    .await?;
+  Ok(())
 }
 
 pub async fn find_file_message(
@@ -870,5 +961,58 @@ fn cleanup_empty_dirs(root: PathBuf, start: Option<&Path>) {
     let parent = dir.parent().map(|p| p.to_path_buf());
     let _ = std::fs::remove_dir(&dir);
     current = parent;
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::io::Write;
+  use tempfile::tempdir;
+
+  #[test]
+  fn find_local_download_returns_existing_when_size_unknown() {
+    let tmp = tempdir().expect("tempdir");
+    let paths = Paths::from_base(tmp.path().to_path_buf());
+    let dir_path = PathBuf::from("docs");
+    let base_dir = paths.cache_dir.join("downloads").join(&dir_path);
+    std::fs::create_dir_all(&base_dir).expect("create dirs");
+    let file_path = base_dir.join("report.txt");
+    let mut file = std::fs::File::create(&file_path).expect("create file");
+    writeln!(file, "hello").expect("write");
+
+    let found = find_local_download(&paths, &dir_path, "report.txt", 0);
+    assert_eq!(found, Some(file_path));
+  }
+
+  #[test]
+  fn find_local_download_falls_back_when_size_mismatch() {
+    let tmp = tempdir().expect("tempdir");
+    let paths = Paths::from_base(tmp.path().to_path_buf());
+    let dir_path = PathBuf::from("docs");
+    let base_dir = paths.cache_dir.join("downloads").join(&dir_path);
+    std::fs::create_dir_all(&base_dir).expect("create dirs");
+    let file_path = base_dir.join("report.txt");
+    let mut file = std::fs::File::create(&file_path).expect("create file");
+    writeln!(file, "hello").expect("write");
+
+    // Размер в БД мог устареть, но локальную копию все равно нужно переиспользовать.
+    let found = find_local_download(&paths, &dir_path, "report.txt", 1024);
+    assert_eq!(found, Some(file_path));
+  }
+
+  #[test]
+  fn local_download_info_returns_actual_local_size() {
+    let tmp = tempdir().expect("tempdir");
+    let paths = Paths::from_base(tmp.path().to_path_buf());
+    let dir_path = PathBuf::from("docs");
+    let base_dir = paths.cache_dir.join("downloads").join(&dir_path);
+    std::fs::create_dir_all(&base_dir).expect("create dirs");
+    let file_path = base_dir.join("report.txt");
+    std::fs::write(&file_path, b"hello world").expect("write");
+
+    let (downloaded, local_size) = local_download_info(&paths, &dir_path, "report.txt", 0);
+    assert!(downloaded);
+    assert_eq!(local_size, Some(11));
   }
 }

@@ -14,6 +14,8 @@ export type FileItem = {
   dir_id: string;
   name: string;
   size: number;
+  local_size: number | null;
+  is_downloaded: boolean;
   hash: string;
   tg_chat_id: number;
   tg_msg_id: number;
@@ -93,7 +95,7 @@ type State = {
   moveFiles: (fileIds: string[], dirId: string) => Promise<void>;
   deleteFiles: (fileIds: string[]) => Promise<void>;
   repairFile: (fileId: string, path?: string) => Promise<RepairResult>;
-  downloadFile: (fileId: string) => Promise<string>;
+  downloadFile: (fileId: string, overwrite?: boolean) => Promise<string>;
   openFile: (fileId: string) => Promise<void>;
   openFileFolder: (fileId: string) => Promise<void>;
   searchChats: (query: string) => Promise<ChatItem[]>;
@@ -229,8 +231,8 @@ export const useAppStore = create<State>((set, get) => ({
   repairFile: async (fileId, path) => {
     return invokeSafe<RepairResult>("file_repair", { fileId, path: path ?? null });
   },
-  downloadFile: async (fileId) => {
-    return invokeSafe<string>("file_download", { fileId });
+  downloadFile: async (fileId, overwrite = false) => {
+    return invokeSafe<string>("file_download", { fileId, overwrite });
   },
   openFile: async (fileId) => {
     await invokeSafe("file_open", { fileId });

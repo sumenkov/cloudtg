@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAppStore, DirNode, ChatItem, FileItem } from "../store/app";
 import { listenSafe } from "../tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { createDragDropHandler, createTreeUpdatedHandler, normalizeUploadPaths } from "./fileManagerListeners";
 
 function containsNode(root: DirNode, id: string): boolean {
   if (root.id === id) return true;
@@ -185,9 +186,11 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const [searchAll, setSearchAll] = useState(false);
   const [searchActive, setSearchActive] = useState(false);
   const [searchBusy, setSearchBusy] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
   const selectedNodeRef = useRef<DirNode | null>(null);
   const isRootSelectedRef = useRef<boolean>(false);
   const reloadFilesRef = useRef<() => Promise<void>>(async () => {});
+  const uploadInProgressRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!tree) return;
@@ -313,59 +316,58 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let disposed = false;
+    const handleTreeUpdated = createTreeUpdatedHandler(
+      selectedNodeRef,
+      isRootSelectedRef,
+      reloadFilesRef
+    );
     (async () => {
       try {
-        unlisten = await listenSafe("tree_updated", async () => {
-          if (!selectedNodeRef.current || isRootSelectedRef.current) return;
-          await reloadFilesRef.current();
-        });
+        const cleanup = await listenSafe("tree_updated", handleTreeUpdated);
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlisten = cleanup;
       } catch (e: any) {
         setError(String(e));
       }
     })();
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
     };
   }, [setError]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let disposed = false;
     const win = getCurrentWindow();
+    const handleDragDropEvent = createDragDropHandler(
+      selectedNodeRef,
+      isRootSelectedRef,
+      reloadFilesRef,
+      uploadInProgressRef,
+      uploadFile,
+      setDropActive,
+      setUploadBusy,
+      (message) => setError(message)
+    );
     win
-      .onDragDropEvent((event) => {
-        const payload: any = event.payload;
-        if (payload.type === "over") {
-          setDropActive(true);
-        } else if (payload.type === "leave") {
-          setDropActive(false);
-        } else if (payload.type === "drop") {
-          setDropActive(false);
-          const paths = payload.paths as string[] | undefined;
-          if (!paths || paths.length === 0) return;
-          const currentNode = selectedNodeRef.current;
-          if (!currentNode || isRootSelectedRef.current) {
-            setError("Выбери папку, чтобы загрузить файлы.");
-            return;
-          }
-          (async () => {
-            try {
-              for (const path of paths) {
-                await uploadFile(currentNode.id, path);
-              }
-              await reloadFilesRef.current();
-            } catch (e: any) {
-              setError(String(e));
-            }
-          })();
-        }
-      })
+      .onDragDropEvent(handleDragDropEvent)
       .then((u) => {
+        if (disposed) {
+          u();
+          return;
+        }
         unlisten = u;
       })
       .catch(() => {
         // В браузере событие может быть недоступно.
       });
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
     };
   }, [uploadFile, setError]);
@@ -591,21 +593,28 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                 </div>
                 <button
                   onClick={async () => {
-                    if (!selectedNode || isRootSelected) return;
+                    if (!selectedNode || isRootSelected || uploadInProgressRef.current) return;
+                    uploadInProgressRef.current = true;
+                    setUploadBusy(true);
                     try {
                       const paths = await pickFiles();
-                      if (!paths || paths.length === 0) return;
-                      for (const path of paths) {
+                      const uniquePaths = normalizeUploadPaths(paths);
+                      if (uniquePaths.length === 0) return;
+                      for (const path of uniquePaths) {
                         await uploadFile(selectedNode.id, path);
                       }
                       await reloadFiles();
                     } catch (e: any) {
                       setError(String(e));
+                    } finally {
+                      uploadInProgressRef.current = false;
+                      setUploadBusy(false);
                     }
                   }}
+                  disabled={uploadBusy}
                   style={{ padding: 10, borderRadius: 10 }}
                 >
-                  Выбрать и загрузить
+                  {uploadBusy ? "Загрузка..." : "Выбрать и загрузить"}
                 </button>
                 <div style={{ fontSize: 12, opacity: 0.6 }}>
                   Всего: {files.length}
@@ -877,6 +886,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                   <div>
                     {files.map((f) => {
                       const checked = selectedFiles.has(f.id);
+                      const displaySize = f.is_downloaded ? (f.local_size ?? 0) : 0;
                       return (
                         <div
                           key={f.id}
@@ -921,13 +931,20 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                             </div>
                             <span style={{ fontSize: 11, opacity: 0.6 }}>#{f.hash}</span>
                           </div>
-                          <div style={{ fontSize: 12, opacity: 0.7 }}>{formatBytes(f.size)}</div>
+                          <div style={{ fontSize: 12, opacity: 0.7 }}>{formatBytes(displaySize)}</div>
                           <div style={{ fontSize: 12, opacity: 0.5 }}>{f.id.slice(0, 6)}</div>
                           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
                             <button
                               onClick={async () => {
                                 try {
-                                  await downloadFile(f.id);
+                                  let overwrite = false;
+                                  if (f.is_downloaded) {
+                                    const ok = window.confirm("Файл уже скачан. Перезаписать локальную копию?");
+                                    if (!ok) return;
+                                    overwrite = true;
+                                  }
+                                  await downloadFile(f.id, overwrite);
+                                  await reloadFiles();
                                 } catch (e: any) {
                                   setError(String(e));
                                 }
@@ -940,6 +957,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                               onClick={async () => {
                                 try {
                                   await openFile(f.id);
+                                  await reloadFiles();
                                 } catch (e: any) {
                                   setError(String(e));
                                 }
@@ -948,18 +966,20 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                             >
                               Открыть
                             </button>
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await openFileFolder(f.id);
-                                } catch (e: any) {
-                                  setError(String(e));
-                                }
-                              }}
-                              style={{ padding: "6px 10px", borderRadius: 8 }}
-                            >
-                              Открыть папку
-                            </button>
+                            {f.is_downloaded ? (
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await openFileFolder(f.id);
+                                  } catch (e: any) {
+                                    setError(String(e));
+                                  }
+                                }}
+                                style={{ padding: "6px 10px", borderRadius: 8 }}
+                              >
+                                Открыть папку
+                              </button>
+                            ) : null}
                             <button
                               onClick={() => {
                                 setShareFile(f);
