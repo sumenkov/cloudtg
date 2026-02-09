@@ -31,7 +31,6 @@ export default function App() {
     setTgSync
   } = useAppStore();
   const [showSettings, setShowSettings] = useState(false);
-  const [autoShowSettings, setAutoShowSettings] = useState(true);
   const syncStartedRef = useRef(false);
   const progressValue =
     tdlibBuild.progress === null ? null : Math.max(0, Math.min(100, tdlibBuild.progress));
@@ -130,15 +129,6 @@ export default function App() {
     setTgSync
   ]);
 
-  useEffect(() => {
-    if (auth === "wait_config" && autoShowSettings) {
-      setShowSettings(true);
-    }
-    if (auth === "ready") {
-      setAutoShowSettings(true);
-    }
-  }, [auth, autoShowSettings]);
-
   return (
     <div style={{ fontFamily: "system-ui, sans-serif", padding: 16, maxWidth: 1100, margin: "0 auto" }}>
       <style>
@@ -149,7 +139,6 @@ export default function App() {
         <button
           onClick={() => {
             setShowSettings((v) => !v);
-            setAutoShowSettings(false);
           }}
           style={{ padding: "8px 12px", borderRadius: 10 }}
         >
@@ -316,7 +305,6 @@ export default function App() {
         <Settings
           onClose={() => {
             setShowSettings(false);
-            setAutoShowSettings(false);
           }}
         />
       ) : auth !== "ready" ? (
