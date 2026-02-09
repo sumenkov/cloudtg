@@ -1,5 +1,11 @@
 # CloudTG
 
+## Скачать и запустить (для ленивых)
+- Windows (portable `.zip`): [CloudTG-windows-portable-x86_64.zip](https://github.com/sumenkov/cloudtg/releases/latest/download/CloudTG-windows-portable-x86_64.zip)
+- Linux (`.AppImage`): [CloudTG-linux-x86_64.AppImage](https://github.com/sumenkov/cloudtg/releases/latest/download/CloudTG-linux-x86_64.AppImage)
+- macOS (`.dmg`): [CloudTG-macos-x86_64.dmg](https://github.com/sumenkov/cloudtg/releases/latest/download/CloudTG-macos-x86_64.dmg)
+- Все релизы: [github.com/sumenkov/cloudtg/releases](https://github.com/sumenkov/cloudtg/releases)
+
 Приложение, которое превращает Telegram в понятное файловое хранилище с папками.
 Файлы хранятся в Telegram, а на компьютере сохраняются база и локальные копии для быстрого открытия.
 
