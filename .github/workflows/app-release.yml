@@ -29,12 +29,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             name: windows-x86_64
           - os: ubuntu-22.04
             name: linux-x86_64
-          - os: macos-13
+          - os: macos-15-intel
             name: macos-x86_64
+            mac_artifact: CloudTG-macos-x86_64.dmg
+          - os: macos-15
+            name: macos-aarch64
+            mac_artifact: CloudTG-macos-aarch64.dmg
 
     steps:
       - name: Checkout
@@ -65,11 +69,51 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Download prebuilt TDLib
+      - name: Download prebuilt TDLib (Linux/macOS)
+        if: runner.os != 'Windows'
         env:
           CLOUDTG_TDLIB_REPO: ${{ github.repository }}
+          CLOUDTG_TDLIB_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/download/tdlib-prebuilt/tdlib-manifest.json
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run tdlib:fetch
+
+      - name: Download prebuilt TDLib (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CLOUDTG_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifestUrl = "https://github.com/$env:CLOUDTG_REPO/releases/download/tdlib-prebuilt/tdlib-manifest.json"
+          $headers = @{ "Accept" = "application/vnd.github+json" }
+          if ($env:GITHUB_TOKEN) {
+            $headers["Authorization"] = "Bearer $env:GITHUB_TOKEN"
+          }
+
+          $manifest = Invoke-RestMethod -Uri $manifestUrl -Headers $headers
+          $entry = $manifest.assets | Where-Object { $_.platform -eq "windows-x86_64" } | Select-Object -First 1
+          if (-not $entry) {
+            throw "В tdlib-manifest.json отсутствует платформа windows-x86_64"
+          }
+
+          $dest = Join-Path $env:GITHUB_WORKSPACE "src-tauri/resources/tdlib/windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+          $tmp = Join-Path $env:RUNNER_TEMP "tdlib-windows-x86_64.zip"
+          Invoke-WebRequest -Uri $entry.url -Headers $headers -OutFile $tmp
+
+          if ($entry.sha256) {
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $tmp).Hash.ToLower()
+            if ($hash -ne $entry.sha256.ToLower()) {
+              throw "Checksum TDLib не совпадает"
+            }
+          }
+
+          Expand-Archive -Path $tmp -DestinationPath $dest -Force
+          if (-not (Test-Path (Join-Path $dest "tdjson.dll"))) {
+            throw "tdjson.dll не найден после распаковки"
+          }
 
       - name: Build app
         run: npm run tauri:build
@@ -120,7 +164,7 @@ jobs:
             echo "Не найден DMG в src-tauri/target/release/bundle/dmg"
             exit 1
           fi
-          cp "$dmg" "dist/CloudTG-macos-x86_64.dmg"
+          cp "$dmg" "dist/${{ matrix.mac_artifact }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -179,3 +223,4 @@ jobs:
             release-assets/CloudTG-windows-portable-x86_64.zip
             release-assets/CloudTG-linux-x86_64.AppImage
             release-assets/CloudTG-macos-x86_64.dmg
+            release-assets/CloudTG-macos-aarch64.dmg
