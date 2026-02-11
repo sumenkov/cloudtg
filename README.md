@@ -1,4 +1,8 @@
-# CloudTG
+# <sub><img src="docs/images/logo.png" alt="CloudTG logo" width="35" /></sub> CloudTG
+
+<p align="center">
+    <img src="docs/images/app-screenshot.png" alt="CloudTG screenshot" width="900" />
+</p>
 
 Telegram как файловое хранилище: файлы живут в канале, а на компьютере лежит индекс и кеш для быстрого открытия.
 Да, это странно. Нет, это не шутка.

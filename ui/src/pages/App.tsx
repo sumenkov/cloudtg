@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invokeSafe, listenSafe, isTauri } from "../tauri";
 import { useAppStore } from "../store/app";
@@ -38,6 +38,10 @@ export default function App() {
     tdlibBuild.progress === null ? null : Math.max(0, Math.min(100, tdlibBuild.progress));
   const syncProgressValue =
     tgSync.total && tgSync.total > 0 ? Math.max(0, Math.min(100, Math.floor((tgSync.processed / tgSync.total) * 100))) : null;
+  const clearErrorOnUserActionStart = useCallback(() => {
+    if (!error) return;
+    setError(null);
+  }, [error, setError]);
 
   useEffect(() => {
     const disposedRef = { current: false };
@@ -150,7 +154,11 @@ export default function App() {
   }, []);
 
   return (
-    <div style={{ fontFamily: "system-ui, sans-serif", padding: 16, maxWidth: 1100, margin: "0 auto" }}>
+    <div
+      onPointerDownCapture={clearErrorOnUserActionStart}
+      onKeyDownCapture={clearErrorOnUserActionStart}
+      style={{ fontFamily: "system-ui, sans-serif", padding: 16, maxWidth: 1100, margin: "0 auto" }}
+    >
       <style>
         {`@keyframes tgSyncMove { 0% { transform: translateX(-60%); } 50% { transform: translateX(60%); } 100% { transform: translateX(120%); } }`}
       </style>
