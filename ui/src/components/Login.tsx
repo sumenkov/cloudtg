@@ -4,13 +4,15 @@ import { useAppStore } from "../store/app";
 import { Hint } from "./common/Hint";
 
 export function Login() {
-  const { auth, setError, refreshAuth, tdlibBuild, tgSettings } = useAppStore();
+  const { auth, setError, refreshAuth, refreshSettings, tdlibBuild, tgSettings } = useAppStore();
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
+  const [keysPassword, setKeysPassword] = useState("");
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [unlockStatus, setUnlockStatus] = useState<string | null>(null);
 
   const phase = auth === "wait_password" ? "password" : auth === "wait_code" ? "code" : "phone";
-  const disabled = auth === "wait_config";
   const buildError = tdlibBuild.state === "error";
   const buildInProgress =
     tdlibBuild.state === "start" ||
@@ -23,6 +25,7 @@ export function Login() {
   const hasSettings = creds.available;
   const locked = creds.locked;
   const showConfigHint = auth === "wait_config" || buildInProgress || buildError || locked || !hasSettings;
+  const disabled = showConfigHint;
 
   const checklist = useMemo(
     () => [
@@ -81,12 +84,54 @@ export function Login() {
           ) : buildError ? (
             <div>Ошибка подготовки TDLib. Открой «Настройки», исправь и сохрани.</div>
           ) : locked ? (
-            <div>Ключи зашифрованы. Открой «Настройки» и разблокируй их паролем.</div>
+            <div>Ключи зашифрованы. Введи пароль ниже, чтобы разблокировать.</div>
           ) : hasSettings ? (
             <div>Ключи сохранены. Если вход не стартует, проверь статус TDLib в «Настройках».</div>
           ) : (
             <div>Сначала укажи API_ID и API_HASH в «Настройках».</div>
           )}
+        </div>
+      ) : null}
+
+      {locked ? (
+        <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
+          <b>Разблокировать ключи</b>
+          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
+            Пароль нужен только если ключи были сохранены в зашифрованном файле.
+          </div>
+          <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+            <input
+              value={keysPassword}
+              onChange={(e) => setKeysPassword(e.target.value)}
+              placeholder="пароль"
+              type="password"
+              style={{ width: "100%", padding: 10 }}
+            />
+            <button
+              onClick={async () => {
+                try {
+                  setUnlockBusy(true);
+                  setUnlockStatus("Разблокирую ключи...");
+                  await invokeSafe("settings_unlock_tg", { password: keysPassword });
+                  setKeysPassword("");
+                  await refreshSettings();
+                  await refreshAuth();
+                  setError(null);
+                  setUnlockStatus("Ключи разблокированы.");
+                } catch (e: any) {
+                  setUnlockStatus("Не удалось разблокировать ключи");
+                  setError(String(e));
+                } finally {
+                  setUnlockBusy(false);
+                }
+              }}
+              disabled={unlockBusy}
+              style={{ padding: 10, borderRadius: 10, opacity: unlockBusy ? 0.7 : 1 }}
+            >
+              Разблокировать
+            </button>
+            {unlockStatus ? <div style={{ fontSize: 12, opacity: 0.75 }}>{unlockStatus}</div> : null}
+          </div>
         </div>
       ) : null}
 
@@ -107,6 +152,7 @@ export function Login() {
               try {
                 await invokeSafe("auth_start", { phone });
                 await refreshAuth();
+                setError(null);
               } catch (e: any) {
                 setError(String(e));
               }
@@ -134,6 +180,7 @@ export function Login() {
               try {
                 await invokeSafe("auth_submit_code", { code });
                 await refreshAuth();
+                setError(null);
               } catch (e: any) {
                 setError(String(e));
               }
@@ -162,6 +209,7 @@ export function Login() {
               try {
                 await invokeSafe("auth_submit_password", { password });
                 await refreshAuth();
+                setError(null);
               } catch (e: any) {
                 setError(String(e));
               }

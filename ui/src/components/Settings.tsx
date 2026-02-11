@@ -3,17 +3,6 @@ import { invokeSafe } from "../tauri";
 import { useAppStore } from "../store/app";
 import { Hint } from "./common/Hint";
 
-type TgSettingsView = {
-  tdlib_path: string | null;
-  credentials: {
-    available: boolean;
-    source: string | null;
-    keychain_available: boolean;
-    encrypted_present: boolean;
-    locked: boolean;
-  };
-};
-
 const RECONCILE_SYNC_REQUIRED = "RECONCILE_SYNC_REQUIRED";
 
 export function Settings({ onClose }: { onClose?: () => void }) {
@@ -61,13 +50,14 @@ export function Settings({ onClose }: { onClose?: () => void }) {
   useEffect(() => {
     (async () => {
       try {
-        const s = await invokeSafe<TgSettingsView>("settings_get_tg");
+        await refreshSettings();
+        const s = useAppStore.getState().tgSettings;
         if (s.tdlib_path) setTdlibPath(s.tdlib_path);
       } catch (e: any) {
         setError(String(e));
       }
     })();
-  }, [setError]);
+  }, [refreshSettings, setError]);
 
   const sourceLabel =
     creds.source === "keychain"
@@ -86,6 +76,21 @@ export function Settings({ onClose }: { onClose?: () => void }) {
 
   return (
     <div style={{ display: "grid", gap: 12, maxWidth: 760 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <b style={{ fontSize: 18 }}>Настройки</b>
+        {onClose ? (
+          <button onClick={onClose} style={{ padding: 10, borderRadius: 10, opacity: 0.85 }}>
+            Закрыть
+          </button>
+        ) : null}
+      </div>
+
+      {status ? (
+        <div style={{ padding: 10, borderRadius: 8, background: "#f6f6f6" }}>
+          {status}
+        </div>
+      ) : null}
+
       <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10, background: "#fafafa" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <b>Быстрый старт</b>
@@ -212,6 +217,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
                   setUnlockPassword("");
                   await refreshSettings();
                   await refreshAuth();
+                  setError(null);
                   setStatus("Ключи разблокированы.");
                 } catch (e: any) {
                   setStatus("Не удалось разблокировать ключи");
@@ -246,6 +252,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
               try {
                 setSaving(true);
                 setStatus("Сохраняю...");
+                setError(null);
                 const apiIdValue = apiId.trim();
                 let apiIdNum: number | null = null;
                 if (apiIdValue) {
@@ -261,6 +268,11 @@ export function Settings({ onClose }: { onClose?: () => void }) {
                 if (remember && storageMode === "encrypted" && !encryptPassword.trim()) {
                   throw new Error("Нужен пароль для шифрования");
                 }
+                if (remember && storageMode === "keychain" && !creds.keychain_available && !encryptPassword.trim()) {
+                  throw new Error(
+                    "Системное хранилище недоступно. Укажи пароль для шифрования или выбери режим «Зашифрованный файл»."
+                  );
+                }
                 const res = await invokeSafe<{ storage?: string | null; message: string }>("settings_set_tg", {
                   input: {
                     apiId: apiIdNum,
@@ -273,9 +285,10 @@ export function Settings({ onClose }: { onClose?: () => void }) {
                 });
                 await refreshSettings();
                 await refreshAuth();
-                setStatus(res.message || "Сохранено. Можно продолжить авторизацию.");
+                setStatus(res.message || "Настройки сохранены.");
                 setApiId("");
                 setApiHash("");
+                setEncryptPassword("");
               } catch (e: any) {
                 setStatus("Не удалось сохранить настройки");
                 setError(String(e));
@@ -308,12 +321,6 @@ export function Settings({ onClose }: { onClose?: () => void }) {
           >
             Проверить связь с Telegram
           </button>
-
-          {onClose ? (
-            <button onClick={onClose} style={{ padding: 10, borderRadius: 10, opacity: 0.8 }}>
-              Закрыть
-            </button>
-          ) : null}
         </div>
       </div>
 
@@ -490,12 +497,6 @@ export function Settings({ onClose }: { onClose?: () => void }) {
           </button>
         </div>
       </div>
-
-      {status ? (
-        <div style={{ padding: 10, borderRadius: 8, background: "#f6f6f6" }}>
-          {status}
-        </div>
-      ) : null}
 
       {tdlibBuild.state && tdlibBuild.state !== "success" ? (
         <div

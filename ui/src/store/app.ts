@@ -161,7 +161,7 @@ export const useAppStore = create<State>((set, get) => ({
     return status.state;
   },
   refreshSettings: async () => {
-    const s = await invokeSafe<{
+    const s = await invokeWithInitRetry<{
       tdlib_path: string | null;
       credentials: {
         available: boolean;
@@ -175,7 +175,7 @@ export const useAppStore = create<State>((set, get) => ({
   },
 
   refreshTree: async () => {
-    const t = await invokeSafe<DirNode>("dir_list_tree");
+    const t = await invokeWithInitRetry<DirNode>("dir_list_tree");
     set({ tree: t });
   },
 
@@ -258,4 +258,37 @@ function extractPercent(line: string): number | null {
   const value = Number.parseInt(match[1], 10);
   if (!Number.isFinite(value) || value < 0 || value > 100) return null;
   return value;
+}
+
+function isBackendInitInProgressError(msg: string): boolean {
+  // Startup race: UI may call commands before Rust init finishes.
+  return (
+    msg.includes("База данных еще не инициализирована") ||
+    msg.includes("Пути еще не инициализированы") ||
+    msg.includes("Telegram сервис еще не инициализирован")
+  );
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function invokeWithInitRetry<T>(cmd: string, args?: Record<string, any>): Promise<T> {
+  const start = Date.now();
+  const timeoutMs = 10_000;
+  let delayMs = 100;
+
+  // Retry only for known "backend not ready yet" errors.
+  while (true) {
+    try {
+      return await invokeSafe<T>(cmd, args);
+    } catch (e: any) {
+      const msg = String(e);
+      if (!isBackendInitInProgressError(msg) || Date.now() - start >= timeoutMs) {
+        throw e;
+      }
+      await sleep(delayMs);
+      delayMs = Math.min(750, Math.floor(delayMs * 1.5));
+    }
+  }
 }
