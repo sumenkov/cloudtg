@@ -132,11 +132,16 @@ jobs:
           }
           Copy-Item $exePath "portable/CloudTG.exe" -Force
 
-          $dllPath = "src-tauri/resources/tdlib/windows-x86_64/tdjson.dll"
-          if (-not (Test-Path $dllPath)) {
-            throw "Не найден TDLib: $dllPath"
+          $tdlibDir = "src-tauri/resources/tdlib/windows-x86_64"
+          if (-not (Test-Path $tdlibDir)) {
+            throw "Не найдена директория TDLib: $tdlibDir"
           }
-          Copy-Item $dllPath "portable/tdjson.dll" -Force
+          if (-not (Test-Path (Join-Path $tdlibDir "tdjson.dll"))) {
+            throw "Не найден tdjson.dll в $tdlibDir"
+          }
+
+          # Copy all bundled runtime DLLs (tdjson + deps) next to the exe for a truly portable build.
+          Copy-Item (Join-Path $tdlibDir "*") "portable/" -Force
 
           Compress-Archive -Path "portable/*" -DestinationPath "dist/CloudTG-windows-portable-x86_64.zip" -Force
 

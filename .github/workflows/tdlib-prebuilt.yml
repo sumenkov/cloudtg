@@ -105,6 +105,21 @@ jobs:
             exit 1
           }
           Copy-Item $libPath.FullName -Destination $outDir -Force
+
+          # TDLib on Windows often depends on vcpkg-provided runtime DLLs (OpenSSL, zlib).
+          # Bundle them вместе с tdjson.dll, чтобы portable-версии не ломались на чистых системах.
+          $vcpkgBin = "C:\\vcpkg\\installed\\x64-windows\\bin"
+          if (Test-Path $vcpkgBin) {
+            $patterns = @("libcrypto*.dll", "libssl*.dll", "zlib1.dll")
+            foreach ($pattern in $patterns) {
+              Get-ChildItem -Path $vcpkgBin -Filter $pattern -ErrorAction SilentlyContinue | ForEach-Object {
+                Copy-Item $_.FullName -Destination $outDir -Force
+              }
+            }
+          } else {
+            Write-Host "vcpkg bin не найден: $vcpkgBin (пропускаю копирование зависимостей)"
+          }
+
           $commit = git -C td rev-parse HEAD
           $commit | Out-File -FilePath (Join-Path $outDir "TDLIB_COMMIT.txt") -Encoding utf8 -NoNewline
 

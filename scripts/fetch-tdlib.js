@@ -30,9 +30,29 @@ function detectExistingTdlib() {
   ];
   for (const base of bases) {
     for (const name of names) {
-      if (fileExists(path.join(base, name))) {
-        return path.join(base, name);
+      const libPath = path.join(base, name);
+      if (!fileExists(libPath)) continue;
+
+      // On Windows the prebuilt tdjson.dll usually needs extra runtime DLLs (OpenSSL, zlib).
+      // If only tdjson.dll is present, treat it as "not installed" and fetch a complete bundle.
+      if (platform === "win32" && name === "tdjson.dll") {
+        try {
+          const files = fs
+            .readdirSync(base, { withFileTypes: true })
+            .filter((e) => e.isFile())
+            .map((e) => e.name.toLowerCase());
+          const hasCrypto = files.some((n) => n.startsWith("libcrypto") && n.endsWith(".dll"));
+          const hasSsl = files.some((n) => n.startsWith("libssl") && n.endsWith(".dll"));
+          const hasZlib = files.includes("zlib1.dll");
+          if (!hasCrypto || !hasSsl || !hasZlib) {
+            continue;
+          }
+        } catch {
+          continue;
+        }
       }
+
+      return libPath;
     }
   }
   return null;
