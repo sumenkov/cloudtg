@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { invokeSafe, listenSafe } from "../tauri";
+import { getVersion } from "@tauri-apps/api/app";
+import { invokeSafe, listenSafe, isTauri } from "../tauri";
 import { useAppStore } from "../store/app";
 import { FileManager } from "../components/FileManager";
 import { Login } from "../components/Login";
@@ -31,6 +32,7 @@ export default function App() {
     setTgSync
   } = useAppStore();
   const [showSettings, setShowSettings] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const syncStartedRef = useRef(false);
   const progressValue =
     tdlibBuild.progress === null ? null : Math.max(0, Math.min(100, tdlibBuild.progress));
@@ -129,13 +131,34 @@ export default function App() {
     setTgSync
   ]);
 
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!isTauri()) return;
+      try {
+        const version = await getVersion();
+        if (active) {
+          setAppVersion(version);
+        }
+      } catch {
+        // Ignore version read errors, UI can work without it.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <div style={{ fontFamily: "system-ui, sans-serif", padding: 16, maxWidth: 1100, margin: "0 auto" }}>
       <style>
         {`@keyframes tgSyncMove { 0% { transform: translateX(-60%); } 50% { transform: translateX(60%); } 100% { transform: translateX(120%); } }`}
       </style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ marginBottom: 6 }}>CloudTG</h1>
+        <div>
+          <h1 style={{ marginBottom: 4 }}>CloudTG</h1>
+          {appVersion ? <div style={{ fontSize: 12, opacity: 0.65 }}>v{appVersion}</div> : null}
+        </div>
         <button
           onClick={() => {
             setShowSettings((v) => !v);
