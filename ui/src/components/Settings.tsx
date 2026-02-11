@@ -234,12 +234,30 @@ export function Settings({ onClose }: { onClose?: () => void }) {
         <div style={{ marginTop: 10 }}>
           <label>
             Путь к TDLib (libtdjson)
-            <input
-              value={tdlibPath}
-              onChange={(e) => setTdlibPath(e.target.value)}
-              placeholder="/полный/путь/к/libtdjson.so"
-              style={{ width: "100%", padding: 10 }}
-            />
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                value={tdlibPath}
+                onChange={(e) => setTdlibPath(e.target.value)}
+                placeholder="/полный/путь/к/libtdjson.so"
+                style={{ flex: 1, padding: 10 }}
+              />
+              <button
+                onClick={async () => {
+                  try {
+                    setError(null);
+                    const picked = await invokeSafe<string | null>("tdlib_pick");
+                    if (picked) {
+                      setTdlibPath(picked);
+                    }
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+                style={{ padding: 10, borderRadius: 10, opacity: 0.9, whiteSpace: "nowrap" }}
+              >
+                Открыть
+              </button>
+            </div>
           </label>
           <div style={{ opacity: 0.7, marginTop: 4, fontSize: 12 }}>
             Можно оставить пустым: приложение попробует найти, скачать или собрать TDLib автоматически.

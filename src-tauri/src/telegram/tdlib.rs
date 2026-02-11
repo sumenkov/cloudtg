@@ -69,8 +69,43 @@ unsafe impl Send for TdlibClient {}
 
 impl TdlibClient {
   fn load(path: &Path) -> anyhow::Result<Self> {
+    let mut resolved = path.to_path_buf();
+    if !resolved.is_absolute() {
+      if let Ok(cwd) = std::env::current_dir() {
+        resolved = cwd.join(&resolved);
+      }
+    }
+    let resolved = std::fs::canonicalize(&resolved).unwrap_or(resolved);
+
     unsafe {
-      let lib = Library::new(path)?;
+      #[cfg(target_os = "windows")]
+      let lib: Library = {
+        use libloading::os::windows::{
+          Library as WinLibrary,
+          LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+          LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+          LOAD_WITH_ALTERED_SEARCH_PATH
+        };
+
+        // When loading a DLL from an arbitrary folder, ensure the DLL directory is searched for
+        // its dependencies. This is important for portable Windows builds.
+        let flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+        match WinLibrary::load_with_flags(&resolved, flags) {
+          Ok(l) => l.into(),
+          Err(e1) => match WinLibrary::load_with_flags(&resolved, LOAD_WITH_ALTERED_SEARCH_PATH) {
+            Ok(l) => l.into(),
+            Err(e2) => {
+              return Err(anyhow::anyhow!(
+                "Не удалось загрузить библиотеку TDLib по пути {}: {e1} (fallback: {e2}). Возможно, рядом отсутствуют зависимые DLL.",
+                resolved.display()
+              ));
+            }
+          }
+        }
+      };
+
+      #[cfg(not(target_os = "windows"))]
+      let lib = Library::new(&resolved)?;
       let create = *lib.get::<unsafe extern "C" fn() -> *mut c_void>(b"td_json_client_create")?;
       let send = *lib.get::<unsafe extern "C" fn(*mut c_void, *const c_char)>(b"td_json_client_send")?;
       let receive = *lib.get::<unsafe extern "C" fn(*mut c_void, c_double) -> *const c_char>(b"td_json_client_receive")?;
@@ -654,7 +689,7 @@ impl TdlibTelegram {
                 params_sent = false;
               }
               Err(e) => {
-                tracing::error!("Не удалось загрузить TDLib: {e}");
+                tracing::error!(tdlib_path = %lp.display(), error = %e, "Не удалось загрузить TDLib");
                 set_auth_state(&app_for_thread, AuthState::WaitConfig, &mut last_state);
               }
             }

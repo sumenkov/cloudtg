@@ -429,6 +429,21 @@ pub async fn file_pick() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+pub async fn tdlib_pick() -> Result<Option<String>, String> {
+  let dialog = rfd::FileDialog::new();
+
+  #[cfg(target_os = "windows")]
+  let dialog = dialog.add_filter("TDLib", &["dll"]);
+
+  #[cfg(target_os = "macos")]
+  let dialog = dialog.add_filter("TDLib", &["dylib"]);
+
+  // On Linux, TDLib is often `libtdjson.so.1`, and filtering by extension can hide it.
+  let file = dialog.pick_file();
+  Ok(file.map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
 pub async fn file_upload(state: State<'_, AppState>, dir_id: String, path: String) -> Result<String, String> {
   info!(event = "file_upload", dir_id = dir_id.as_str(), "Загрузка файла");
   let db = state.db().map_err(map_err)?;
