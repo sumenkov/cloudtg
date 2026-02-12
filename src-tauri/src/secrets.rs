@@ -129,6 +129,10 @@ pub fn tdlib_db_encryption_key(paths: &Paths) -> anyhow::Result<String> {
     if bytes.len() == 32 {
       return Ok(hex::encode(bytes));
     }
+    return Err(anyhow::anyhow!(
+      "Файл ключа шифрования TDLib поврежден: ожидается 32 байта, получено {}",
+      bytes.len()
+    ));
   }
 
   let mut key = [0u8; 32];
@@ -391,5 +395,32 @@ mod tests {
     let creds = test_creds();
     let err = encrypted_save(&paths, &creds, "   ").expect_err("must fail");
     assert!(err.to_string().contains("Нужен пароль"));
+  }
+
+  #[test]
+  fn tdlib_db_encryption_key_creates_and_reuses_existing_key() {
+    let tmp = tempdir().expect("tempdir");
+    let paths = Paths::from_base(tmp.path().to_path_buf());
+
+    let first = tdlib_db_encryption_key(&paths).expect("first key");
+    let second = tdlib_db_encryption_key(&paths).expect("second key");
+
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 64);
+    assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+  }
+
+  #[test]
+  fn tdlib_db_encryption_key_rejects_invalid_existing_file() {
+    let tmp = tempdir().expect("tempdir");
+    let paths = Paths::from_base(tmp.path().to_path_buf());
+    let key_path = tdlib_db_key_path(&paths);
+    if let Some(parent) = key_path.parent() {
+      std::fs::create_dir_all(parent).expect("mkdir");
+    }
+    std::fs::write(&key_path, [1u8; 8]).expect("write invalid key");
+
+    let err = tdlib_db_encryption_key(&paths).expect_err("must fail");
+    assert!(err.to_string().contains("поврежден"));
   }
 }

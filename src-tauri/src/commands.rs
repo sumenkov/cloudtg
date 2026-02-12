@@ -1,4 +1,5 @@
 use tauri::{Emitter, State, AppHandle};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use crate::sqlx::{self, Row};
 use sqlx_sqlite::SqlitePool;
@@ -156,8 +157,14 @@ fn parse_semver_triplet(version: &str) -> Option<(u64, u64, u64)> {
 fn is_newer_version(candidate: &str, current: &str) -> bool {
   match (parse_semver_triplet(candidate), parse_semver_triplet(current)) {
     (Some(c), Some(cur)) => c > cur,
-    _ => candidate.trim() != current.trim()
+    (Some(_), None) => true,
+    _ => false
   }
+}
+
+fn is_strict_https_url(url: &str) -> bool {
+  let trimmed = url.trim();
+  trimmed.len() > "https://".len() && trimmed.starts_with("https://")
 }
 
 fn preferred_asset_download_url(assets: &[GithubReleaseAsset]) -> Option<String> {
@@ -182,6 +189,64 @@ fn github_api_agent() -> Agent {
     .timeout_recv_body(Some(std::time::Duration::from_secs(20)))
     .build()
     .into()
+}
+
+fn normalize_upload_candidate_paths(paths: Vec<String>) -> Vec<PathBuf> {
+  let mut out = Vec::new();
+  let mut seen = HashSet::new();
+
+  for raw in paths {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+    let candidate = PathBuf::from(trimmed);
+    let canonical = match std::fs::canonicalize(&candidate) {
+      Ok(path) => path,
+      Err(_) => continue
+    };
+    let is_file = std::fs::metadata(&canonical).map(|m| m.is_file()).unwrap_or(false);
+    if !is_file {
+      continue;
+    }
+    let key = canonical.to_string_lossy().to_string();
+    if seen.insert(key) {
+      out.push(canonical);
+    }
+  }
+
+  out
+}
+
+fn upload_confirmation_message(paths: &[PathBuf]) -> String {
+  let total = paths.len();
+  let mut message = format!(
+    "Подтверди загрузку {total} файл(ов) в CloudTG.\n\nБудут загружены:\n"
+  );
+
+  for path in paths.iter().take(3) {
+    message.push_str(&format!("- {}\n", path.display()));
+  }
+
+  if total > 3 {
+    message.push_str(&format!("... и еще {} файл(ов)\n", total - 3));
+  }
+
+  message.push_str("\nПродолжить?");
+  message
+}
+
+fn confirm_upload_paths(paths: &[PathBuf]) -> bool {
+  if paths.is_empty() {
+    return true;
+  }
+  let result = rfd::MessageDialog::new()
+    .set_title("Подтверждение загрузки")
+    .set_level(rfd::MessageLevel::Warning)
+    .set_description(upload_confirmation_message(paths))
+    .set_buttons(rfd::MessageButtons::OkCancel)
+    .show();
+  matches!(result, rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes)
 }
 
 fn emit_sync(app: &AppHandle, state: &str, message: &str, processed: i64, total: Option<i64>) {
@@ -417,8 +482,8 @@ pub async fn app_check_update() -> Result<AppUpdateInfo, String> {
 #[tauri::command]
 pub async fn app_open_url(url: String) -> Result<(), String> {
   let url = url.trim().to_string();
-  if !(url.starts_with("https://") || url.starts_with("http://")) {
-    return Err("Разрешены только http(s) ссылки".into());
+  if !is_strict_https_url(&url) {
+    return Err("Разрешены только https ссылки".into());
   }
   open_url_in_os(&url).map_err(map_err)?;
   Ok(())
@@ -570,7 +635,13 @@ pub async fn file_pick_upload(state: State<'_, AppState>) -> Result<Vec<String>,
 
 #[tauri::command]
 pub async fn file_prepare_upload_paths(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<String>, String> {
-  let parsed = paths.into_iter().map(PathBuf::from).collect();
+  let parsed = normalize_upload_candidate_paths(paths);
+  if parsed.is_empty() {
+    return Ok(Vec::new());
+  }
+  if !confirm_upload_paths(&parsed) {
+    return Err("Загрузка отменена пользователем.".into());
+  }
   Ok(state.register_upload_paths(parsed))
 }
 
@@ -1822,6 +1893,58 @@ mod tests {
     assert!(!resolve_download_overwrite(None));
     assert!(!resolve_download_overwrite(Some(false)));
     assert!(resolve_download_overwrite(Some(true)));
+  }
+
+  #[test]
+  fn is_newer_version_uses_strict_semver_logic() {
+    assert!(is_newer_version("v1.0.7", "1.0.6"));
+    assert!(!is_newer_version("1.0.6", "1.0.6"));
+    assert!(!is_newer_version("latest", "1.0.6"));
+    assert!(!is_newer_version("release-candidate", "1.0.6"));
+  }
+
+  #[test]
+  fn is_strict_https_url_accepts_only_https() {
+    assert!(is_strict_https_url("https://example.com/release"));
+    assert!(!is_strict_https_url("http://example.com/release"));
+    assert!(!is_strict_https_url("https://"));
+    assert!(!is_strict_https_url("file:///tmp/x"));
+  }
+
+  #[test]
+  fn normalize_upload_candidate_paths_filters_and_deduplicates() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let file = tmp.path().join("report.txt");
+    let dir = tmp.path().join("folder");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(&file, b"payload")?;
+    let duplicate = tmp.path().join(".").join("report.txt");
+    let missing = tmp.path().join("missing.txt");
+
+    let out = normalize_upload_candidate_paths(vec![
+      file.to_string_lossy().to_string(),
+      duplicate.to_string_lossy().to_string(),
+      dir.to_string_lossy().to_string(),
+      missing.to_string_lossy().to_string()
+    ]);
+    let expected = std::fs::canonicalize(&file)?;
+
+    assert_eq!(out, vec![expected]);
+    Ok(())
+  }
+
+  #[test]
+  fn upload_confirmation_message_shows_summary_for_long_list() {
+    let paths = vec![
+      PathBuf::from("/tmp/a.txt"),
+      PathBuf::from("/tmp/b.txt"),
+      PathBuf::from("/tmp/c.txt"),
+      PathBuf::from("/tmp/d.txt")
+    ];
+    let msg = upload_confirmation_message(&paths);
+    assert!(msg.contains("Подтверди загрузку 4 файл(ов)"));
+    assert!(msg.contains("... и еще 1 файл(ов)"));
+    assert!(msg.contains("/tmp/a.txt"));
   }
 
   #[tokio::test]
