@@ -92,6 +92,7 @@ type State = {
   searchFiles: (filters: FileSearchFilters) => Promise<void>;
   pickFiles: () => Promise<string[]>;
   pickUploadFiles: () => Promise<string[]>;
+  prepareUploadPaths: (paths: string[]) => Promise<string[]>;
   uploadFile: (dirId: string, uploadToken: string) => Promise<void>;
   moveFiles: (fileIds: string[], dirId: string) => Promise<void>;
   deleteFiles: (fileIds: string[]) => Promise<void>;
@@ -215,6 +216,9 @@ export const useAppStore = create<State>((set, get) => ({
   },
   pickUploadFiles: async () => {
     return invokeSafe<string[]>("file_pick_upload");
+  },
+  prepareUploadPaths: async (paths) => {
+    return invokeSafe<string[]>("file_prepare_upload_paths", { paths });
   },
   uploadFile: async (dirId, uploadToken) => {
     await invokeSafe("file_upload", { dirId, uploadToken });

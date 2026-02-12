@@ -22,6 +22,12 @@ const folderNode: DirNode = {
   children: []
 };
 
+async function flushMicrotasks(times = 3) {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("fileManagerListeners", () => {
   it("tree_updated handler reads latest refs at call time", async () => {
     const reloadOld = vi.fn(async () => {});
@@ -58,27 +64,56 @@ describe("fileManagerListeners", () => {
     expect(reloadFiles).not.toHaveBeenCalled();
   });
 
-  it("drop handler blocks drag and drop uploads for security", () => {
+  it("drop handler uploads dropped files into selected folder", async () => {
+    const prepareUploadPaths = vi.fn(async () => ["tok-1", "tok-2"]);
+    const uploadFile = vi.fn(async () => {});
+    const reloadOld = vi.fn(async () => {});
+    const reloadNew = vi.fn(async () => {});
+    const selectedNodeRef = { current: rootNode as DirNode | null };
+    const isRootSelectedRef = { current: true };
+    const reloadFilesRef = { current: reloadOld };
+    const uploadInProgressRef = { current: false };
     const setDropActive = vi.fn();
+    const setUploadBusy = vi.fn();
     const setError = vi.fn();
-    const selectedNodeRef = { current: folderNode as DirNode | null };
-    const isRootSelectedRef = { current: false };
 
     const handler = createDragDropHandler(
       selectedNodeRef,
       isRootSelectedRef,
+      reloadFilesRef,
+      uploadInProgressRef,
+      prepareUploadPaths,
+      uploadFile,
       setDropActive,
+      setUploadBusy,
       setError
     );
 
+    selectedNodeRef.current = folderNode;
+    isRootSelectedRef.current = false;
+    reloadFilesRef.current = reloadNew;
+
     handler({ payload: { type: "drop", paths: ["/tmp/one.txt", "/tmp/two.txt"] } });
-    expect(setError).toHaveBeenCalledWith(
-      "Перетаскивание файлов отключено из соображений безопасности. Используй кнопку «Выбрать и загрузить»."
-    );
+    await flushMicrotasks();
+
+    expect(prepareUploadPaths).toHaveBeenCalledWith(["/tmp/one.txt", "/tmp/two.txt"]);
+    expect(uploadFile).toHaveBeenCalledTimes(2);
+    expect(uploadFile).toHaveBeenNthCalledWith(1, "dir-a", "tok-1");
+    expect(uploadFile).toHaveBeenNthCalledWith(2, "dir-a", "tok-2");
+    expect(reloadOld).not.toHaveBeenCalled();
+    expect(reloadNew).toHaveBeenCalledTimes(1);
+    expect(setUploadBusy).toHaveBeenNthCalledWith(1, true);
+    expect(setUploadBusy).toHaveBeenNthCalledWith(2, false);
+    expect(setError).not.toHaveBeenCalled();
   });
 
-  it("drop handler reports error when no folder is selected", () => {
+  it("drop handler reports error when no folder is selected", async () => {
+    const prepareUploadPaths = vi.fn(async () => ["tok-1"]);
+    const uploadFile = vi.fn(async () => {});
+    const reloadFilesRef = { current: vi.fn(async () => {}) };
+    const uploadInProgressRef = { current: false };
     const setDropActive = vi.fn();
+    const setUploadBusy = vi.fn();
     const setError = vi.fn();
     const selectedNodeRef = { current: rootNode as DirNode | null };
     const isRootSelectedRef = { current: true };
@@ -86,16 +121,30 @@ describe("fileManagerListeners", () => {
     const handler = createDragDropHandler(
       selectedNodeRef,
       isRootSelectedRef,
+      reloadFilesRef,
+      uploadInProgressRef,
+      prepareUploadPaths,
+      uploadFile,
       setDropActive,
+      setUploadBusy,
       setError
     );
 
     handler({ payload: { type: "drop", paths: ["/tmp/file.txt"] } });
+    await flushMicrotasks();
+
+    expect(prepareUploadPaths).not.toHaveBeenCalled();
+    expect(uploadFile).not.toHaveBeenCalled();
     expect(setError).toHaveBeenCalledWith("Выбери папку, чтобы загрузить файлы.");
   });
 
-  it("drop handler handles over/leave events without reporting errors", () => {
+  it("drop handler handles over/leave events without starting upload", async () => {
+    const prepareUploadPaths = vi.fn(async () => ["tok-1"]);
+    const uploadFile = vi.fn(async () => {});
+    const reloadFilesRef = { current: vi.fn(async () => {}) };
+    const uploadInProgressRef = { current: false };
     const setDropActive = vi.fn();
+    const setUploadBusy = vi.fn();
     const setError = vi.fn();
     const selectedNodeRef = { current: folderNode as DirNode | null };
     const isRootSelectedRef = { current: false };
@@ -103,16 +152,25 @@ describe("fileManagerListeners", () => {
     const handler = createDragDropHandler(
       selectedNodeRef,
       isRootSelectedRef,
+      reloadFilesRef,
+      uploadInProgressRef,
+      prepareUploadPaths,
+      uploadFile,
       setDropActive,
+      setUploadBusy,
       setError
     );
 
     handler({ payload: { type: "over" } });
     handler({ payload: { type: "leave" } });
     handler({ payload: { type: "noop" } });
+    await flushMicrotasks();
 
     expect(setDropActive).toHaveBeenNthCalledWith(1, true);
     expect(setDropActive).toHaveBeenNthCalledWith(2, false);
+    expect(prepareUploadPaths).not.toHaveBeenCalled();
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(setUploadBusy).not.toHaveBeenCalled();
     expect(setError).not.toHaveBeenCalled();
   });
 

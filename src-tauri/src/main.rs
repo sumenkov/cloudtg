@@ -57,6 +57,7 @@ fn main() {
       commands::file_search,
       commands::file_pick,
       commands::file_pick_upload,
+      commands::file_prepare_upload_paths,
       commands::tdlib_pick,
       commands::file_upload,
       commands::file_move,

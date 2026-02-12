@@ -435,6 +435,12 @@ pub async fn file_pick_upload(state: State<'_, AppState>) -> Result<Vec<String>,
 }
 
 #[tauri::command]
+pub async fn file_prepare_upload_paths(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<String>, String> {
+  let parsed = paths.into_iter().map(PathBuf::from).collect();
+  Ok(state.register_upload_paths(parsed))
+}
+
+#[tauri::command]
 pub async fn tdlib_pick() -> Result<Option<String>, String> {
   let dialog = rfd::FileDialog::new();
 

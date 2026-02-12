@@ -59,6 +59,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     refreshFiles,
     searchFiles,
     pickUploadFiles,
+    prepareUploadPaths,
     uploadFile,
     moveFiles,
     deleteFiles,
@@ -95,6 +96,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const isRootSelectedRef = useRef<boolean>(false);
   const reloadFilesRef = useRef<() => Promise<void>>(async () => {});
   const uploadInProgressRef = useRef<boolean>(false);
+  const prevSelectedNodeIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!tree) return;
@@ -229,6 +231,15 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     }
   }, [canUseFiles, activeTab]);
 
+  useEffect(() => {
+    const currentId = selectedNode?.id ?? null;
+    const previousId = prevSelectedNodeIdRef.current;
+    if (currentId && currentId !== "ROOT" && previousId === "ROOT" && activeTab === "folders") {
+      setActiveTab("files");
+    }
+    prevSelectedNodeIdRef.current = currentId;
+  }, [selectedNode?.id, activeTab]);
+
   selectedNodeRef.current = selectedNode;
   isRootSelectedRef.current = isRootSelected;
   reloadFilesRef.current = reloadFiles;
@@ -271,7 +282,12 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     const handleDragDropEvent = createDragDropHandler(
       selectedNodeRef,
       isRootSelectedRef,
+      reloadFilesRef,
+      uploadInProgressRef,
+      prepareUploadPaths,
+      uploadFile,
       setDropActive,
+      setUploadBusy,
       (message) => setError(message)
     );
     win
@@ -290,7 +306,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       disposed = true;
       if (unlisten) unlisten();
     };
-  }, [setError]);
+  }, [prepareUploadPaths, uploadFile, setError]);
 
   const fileMoveOptions = useMemo(() => {
     if (!tree) return [];
@@ -634,11 +650,11 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <b>{dropActive ? "Перетащи сюда, чтобы увидеть подсказку" : "Загрузка через выбор файла"}</b>
-                      <Hint text="Для безопасности загрузка работает только через кнопку справа." />
+                      <b>{dropActive ? "Отпускай файлы для загрузки" : "Перетащи файлы сюда"}</b>
+                      <Hint text="Можно также загрузить файлы через кнопку справа." />
                     </div>
                     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.65 }}>
-                      Перетаскивание отключено. Используй «Выбрать и загрузить» (системный диалог подтверждения файлов).
+                      Локальные копии не дублируются: при повторной загрузке запрашивается перезапись.
                     </div>
                   </div>
                   <button
