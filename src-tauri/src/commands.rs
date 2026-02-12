@@ -429,6 +429,12 @@ pub async fn file_pick() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+pub async fn file_pick_upload(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+  let files = rfd::FileDialog::new().pick_files().unwrap_or_default();
+  Ok(state.register_upload_paths(files))
+}
+
+#[tauri::command]
 pub async fn tdlib_pick() -> Result<Option<String>, String> {
   let dialog = rfd::FileDialog::new();
 
@@ -444,12 +450,15 @@ pub async fn tdlib_pick() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn file_upload(state: State<'_, AppState>, dir_id: String, path: String) -> Result<String, String> {
+pub async fn file_upload(state: State<'_, AppState>, dir_id: String, upload_token: String) -> Result<String, String> {
   info!(event = "file_upload", dir_id = dir_id.as_str(), "Загрузка файла");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
   let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
-  let id = files::upload_file(db.pool(), tg.as_ref(), chat_id, &dir_id, Path::new(&path)).await.map_err(map_err)?;
+  let Some(path) = state.consume_upload_path(&upload_token) else {
+    return Err("Файл не подтвержден. Выбери файл через кнопку «Выбрать и загрузить» и повтори попытку.".into());
+  };
+  let id = files::upload_file(db.pool(), tg.as_ref(), chat_id, &dir_id, path.as_path()).await.map_err(map_err)?;
   Ok(id)
 }
 
@@ -474,14 +483,31 @@ pub async fn file_delete(state: State<'_, AppState>, file_id: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn file_repair(state: State<'_, AppState>, file_id: String, path: Option<String>) -> Result<RepairResult, String> {
+pub async fn file_repair(
+  state: State<'_, AppState>,
+  file_id: String,
+  upload_token: Option<String>
+) -> Result<RepairResult, String> {
   info!(event = "file_repair", file_id = file_id.as_str(), "Восстановление файла");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
   let paths = state.paths().map_err(map_err)?;
   let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
-  let path = path.as_deref().map(std::path::Path::new);
-  let outcome = files::repair_file(db.pool(), tg.as_ref(), &paths, chat_id, &file_id, path)
+  let selected_path = if let Some(token) = upload_token {
+    Some(state.consume_upload_path(&token).ok_or_else(|| {
+      "Файл не подтвержден. Выбери файл через кнопку «Выбрать» и повтори попытку.".to_string()
+    })?)
+  } else {
+    None
+  };
+  let outcome = files::repair_file(
+    db.pool(),
+    tg.as_ref(),
+    &paths,
+    chat_id,
+    &file_id,
+    selected_path.as_deref()
+  )
     .await
     .map_err(map_err)?;
   match outcome {

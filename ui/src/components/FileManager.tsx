@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAppStore, DirNode, ChatItem, FileItem } from "../store/app";
 import { listenSafe } from "../tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createDragDropHandler, createTreeUpdatedHandler, normalizeUploadPaths } from "./fileManagerListeners";
+import { createDragDropHandler, createTreeUpdatedHandler } from "./fileManagerListeners";
 import { TreePanel } from "./file-manager/TreePanel";
 import { SearchPanel } from "./file-manager/SearchPanel";
 import { SharePanel } from "./file-manager/SharePanel";
@@ -58,7 +58,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     files,
     refreshFiles,
     searchFiles,
-    pickFiles,
+    pickUploadFiles,
     uploadFile,
     moveFiles,
     deleteFiles,
@@ -271,11 +271,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     const handleDragDropEvent = createDragDropHandler(
       selectedNodeRef,
       isRootSelectedRef,
-      reloadFilesRef,
-      uploadInProgressRef,
-      uploadFile,
       setDropActive,
-      setUploadBusy,
       (message) => setError(message)
     );
     win
@@ -294,7 +290,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       disposed = true;
       if (unlisten) unlisten();
     };
-  }, [uploadFile, setError]);
+  }, [setError]);
 
   const fileMoveOptions = useMemo(() => {
     if (!tree) return [];
@@ -374,9 +370,9 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const onFileRepair = async (file: FileItem) => {
     let res = await repairFile(file.id);
     if (!res.ok && res.code === REPAIR_NEED_FILE) {
-      const paths = await pickFiles();
-      if (!paths || paths.length === 0) return;
-      res = await repairFile(file.id, paths[0]);
+      const uploadTokens = await pickUploadFiles();
+      if (!uploadTokens || uploadTokens.length === 0) return;
+      res = await repairFile(file.id, uploadTokens[0]);
     }
     if (!res.ok) {
       setError(res.message);
@@ -638,11 +634,11 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <b>{dropActive ? "Отпускай файлы для загрузки" : "Перетащи файлы сюда"}</b>
-                      <Hint text="Можно также загрузить файлы через кнопку справа." />
+                      <b>{dropActive ? "Перетащи сюда, чтобы увидеть подсказку" : "Загрузка через выбор файла"}</b>
+                      <Hint text="Для безопасности загрузка работает только через кнопку справа." />
                     </div>
                     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.65 }}>
-                      Локальные копии не дублируются: при повторной загрузке запрашивается перезапись.
+                      Перетаскивание отключено. Используй «Выбрать и загрузить» (системный диалог подтверждения файлов).
                     </div>
                   </div>
                   <button
@@ -651,11 +647,10 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                       uploadInProgressRef.current = true;
                       setUploadBusy(true);
                       try {
-                        const paths = await pickFiles();
-                        const uniquePaths = normalizeUploadPaths(paths);
-                        if (uniquePaths.length === 0) return;
-                        for (const path of uniquePaths) {
-                          await uploadFile(selectedNode.id, path);
+                        const uploadTokens = await pickUploadFiles();
+                        if (uploadTokens.length === 0) return;
+                        for (const uploadToken of uploadTokens) {
+                          await uploadFile(selectedNode.id, uploadToken);
                         }
                         await reloadFiles();
                       } catch (e: any) {

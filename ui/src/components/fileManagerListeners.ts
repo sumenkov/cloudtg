@@ -38,11 +38,7 @@ export function createTreeUpdatedHandler(
 export function createDragDropHandler(
   selectedNodeRef: RefValue<DirNode | null>,
   isRootSelectedRef: RefValue<boolean>,
-  reloadFilesRef: RefValue<() => Promise<void>>,
-  uploadInProgressRef: RefValue<boolean>,
-  uploadFile: (dirId: string, path: string) => Promise<void>,
   setDropActive: (active: boolean) => void,
-  setUploadBusy: (busy: boolean) => void,
   setError: (message: string) => void
 ): (event: DragDropEvent) => void {
   return (event) => {
@@ -63,27 +59,11 @@ export function createDragDropHandler(
     const paths = normalizeUploadPaths(payload.paths);
     if (paths.length === 0) return;
 
-    const currentNode = selectedNodeRef.current;
-    if (!currentNode || isRootSelectedRef.current) {
+    if (!selectedNodeRef.current || isRootSelectedRef.current) {
       setError("Выбери папку, чтобы загрузить файлы.");
       return;
     }
-    if (uploadInProgressRef.current) return;
-    uploadInProgressRef.current = true;
-    setUploadBusy(true);
 
-    void (async () => {
-      try {
-        for (const path of paths) {
-          await uploadFile(currentNode.id, path);
-        }
-        await reloadFilesRef.current();
-      } catch (e: any) {
-        setError(String(e));
-      } finally {
-        uploadInProgressRef.current = false;
-        setUploadBusy(false);
-      }
-    })();
+    setError("Перетаскивание файлов отключено из соображений безопасности. Используй кнопку «Выбрать и загрузить».");
   };
 }

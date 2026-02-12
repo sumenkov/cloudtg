@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
+use ::sqlx::migrate::Migrator;
 use sqlx_sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool};
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: Migrator = sqlx_macros::migrate!("./migrations");
 
 #[derive(Clone)]
 pub struct Db {

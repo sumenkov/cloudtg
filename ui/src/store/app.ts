@@ -91,10 +91,11 @@ type State = {
   refreshFiles: (dirId: string) => Promise<void>;
   searchFiles: (filters: FileSearchFilters) => Promise<void>;
   pickFiles: () => Promise<string[]>;
-  uploadFile: (dirId: string, path: string) => Promise<void>;
+  pickUploadFiles: () => Promise<string[]>;
+  uploadFile: (dirId: string, uploadToken: string) => Promise<void>;
   moveFiles: (fileIds: string[], dirId: string) => Promise<void>;
   deleteFiles: (fileIds: string[]) => Promise<void>;
-  repairFile: (fileId: string, path?: string) => Promise<RepairResult>;
+  repairFile: (fileId: string, uploadToken?: string) => Promise<RepairResult>;
   downloadFile: (fileId: string, overwrite?: boolean) => Promise<string>;
   openFile: (fileId: string) => Promise<void>;
   openFileFolder: (fileId: string) => Promise<void>;
@@ -212,8 +213,11 @@ export const useAppStore = create<State>((set, get) => ({
     const files = await invokeSafe<string[]>("file_pick");
     return files;
   },
-  uploadFile: async (dirId, path) => {
-    await invokeSafe("file_upload", { dirId, path });
+  pickUploadFiles: async () => {
+    return invokeSafe<string[]>("file_pick_upload");
+  },
+  uploadFile: async (dirId, uploadToken) => {
+    await invokeSafe("file_upload", { dirId, uploadToken });
   },
   moveFiles: async (fileIds, dirId) => {
     for (const fileId of fileIds) {
@@ -228,8 +232,8 @@ export const useAppStore = create<State>((set, get) => ({
       await invokeSafe("file_delete_many", { fileIds });
     }
   },
-  repairFile: async (fileId, path) => {
-    return invokeSafe<RepairResult>("file_repair", { fileId, path: path ?? null });
+  repairFile: async (fileId, uploadToken) => {
+    return invokeSafe<RepairResult>("file_repair", { fileId, uploadToken: uploadToken ?? null });
   },
   downloadFile: async (fileId, overwrite = false) => {
     return invokeSafe<string>("file_download", { fileId, overwrite });

@@ -118,6 +118,28 @@ pub fn encrypted_path(paths: &Paths) -> PathBuf {
   paths.data_dir.join("secrets").join("tg_keys.enc.json")
 }
 
+pub fn tdlib_db_key_path(paths: &Paths) -> PathBuf {
+  paths.data_dir.join("secrets").join("tdlib_db_key.bin")
+}
+
+pub fn tdlib_db_encryption_key(paths: &Paths) -> anyhow::Result<String> {
+  let path = tdlib_db_key_path(paths);
+  if path.exists() {
+    let bytes = std::fs::read(&path).with_context(|| "Не удалось прочитать ключ шифрования TDLib")?;
+    if bytes.len() == 32 {
+      return Ok(hex::encode(bytes));
+    }
+  }
+
+  let mut key = [0u8; 32];
+  getrandom_fill(&mut key).map_err(|e| anyhow::anyhow!("Не удалось получить случайные байты: {e}"))?;
+  if let Some(parent) = path.parent() {
+    std::fs::create_dir_all(parent)?;
+  }
+  write_atomic(&path, &key)?;
+  Ok(hex::encode(key))
+}
+
 pub fn encrypted_exists(paths: &Paths) -> bool {
   encrypted_path(paths).exists()
 }

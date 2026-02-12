@@ -1,8 +1,11 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use tauri::{AppHandle, Manager};
+use ulid::Ulid;
 
 use crate::{paths::Paths, db::Db, telegram::{TelegramService, make_telegram_service}, secrets::{TgCredentials, CredentialsSource}};
 
@@ -17,7 +20,13 @@ struct Inner {
   telegram: Option<Arc<dyn TelegramService>>,
   auth_state: AuthState,
   tg_credentials: Option<TgCredentials>,
-  tg_credentials_source: Option<CredentialsSource>
+  tg_credentials_source: Option<CredentialsSource>,
+  upload_permits: HashMap<String, UploadPermit>
+}
+
+struct UploadPermit {
+  path: PathBuf,
+  expires_at: Instant
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -40,7 +49,8 @@ impl AppState {
         telegram: None,
         auth_state: AuthState::Unknown,
         tg_credentials: None,
-        tg_credentials_source: None
+        tg_credentials_source: None,
+        upload_permits: HashMap::new()
       }))
     }
   }
@@ -82,6 +92,41 @@ impl AppState {
     let mut inner = self.inner.write();
     inner.tg_credentials = None;
     inner.tg_credentials_source = None;
+  }
+
+  pub fn register_upload_paths(&self, paths: Vec<PathBuf>) -> Vec<String> {
+    let mut inner = self.inner.write();
+    cleanup_upload_permits(&mut inner.upload_permits);
+    let mut tokens = Vec::new();
+    let permit_deadline = Instant::now() + Duration::from_secs(5 * 60);
+
+    for path in paths {
+      if inner.upload_permits.len() >= MAX_UPLOAD_PERMITS {
+        break;
+      }
+      let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+      let is_file = std::fs::metadata(&canonical).map(|m| m.is_file()).unwrap_or(false);
+      if !is_file {
+        continue;
+      }
+      let token = Ulid::new().to_string();
+      inner.upload_permits.insert(
+        token.clone(),
+        UploadPermit {
+          path: canonical,
+          expires_at: permit_deadline
+        }
+      );
+      tokens.push(token);
+    }
+
+    tokens
+  }
+
+  pub fn consume_upload_path(&self, token: &str) -> Option<PathBuf> {
+    let mut inner = self.inner.write();
+    cleanup_upload_permits(&mut inner.upload_permits);
+    inner.upload_permits.remove(token).map(|permit| permit.path)
   }
 
   #[cfg(test)]
@@ -181,4 +226,11 @@ fn remove_sqlite_sidecars(path: &Path) {
     let candidate = PathBuf::from(format!("{base}{suffix}"));
     let _ = std::fs::remove_file(candidate);
   }
+}
+
+const MAX_UPLOAD_PERMITS: usize = 512;
+
+fn cleanup_upload_permits(permits: &mut HashMap<String, UploadPermit>) {
+  let now = Instant::now();
+  permits.retain(|_, permit| permit.expires_at > now);
 }

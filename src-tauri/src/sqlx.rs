@@ -1,7 +1,7 @@
-pub use sqlx_core::migrate;
-pub use sqlx_core::query::query;
-pub use sqlx_core::query_builder::QueryBuilder;
-pub use sqlx_core::row::Row;
+pub use ::sqlx::migrate;
+pub use ::sqlx::query::query;
+pub use ::sqlx::query_builder::QueryBuilder;
+pub use ::sqlx::row::Row;
 pub use sqlx_sqlite::SqlitePool;
 
 pub mod sqlite {

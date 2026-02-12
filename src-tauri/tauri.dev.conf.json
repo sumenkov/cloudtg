@@ -1,0 +1,106 @@
+{
+  "productName": "CloudTG",
+  "version": "1.0.5",
+  "identifier": "com.cloudtg.desktop",
+  "build": {
+    "beforeDevCommand": "npm --workspace ui run dev",
+    "beforeBuildCommand": "npm --workspace ui run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "CloudTG",
+        "width": 1100,
+        "height": 760
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "base-uri": "'self'",
+        "form-action": "'self'",
+        "frame-ancestors": "'none'",
+        "object-src": "'none'",
+        "font-src": [
+          "'self'",
+          "data:"
+        ],
+        "img-src": [
+          "'self'",
+          "asset:",
+          "data:",
+          "blob:"
+        ],
+        "media-src": [
+          "'self'",
+          "asset:",
+          "data:",
+          "blob:"
+        ],
+        "style-src": [
+          "'self'",
+          "'unsafe-inline'"
+        ],
+        "connect-src": [
+          "'self'",
+          "ipc:",
+          "http://ipc.localhost"
+        ]
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "base-uri": "'self'",
+        "form-action": "'self'",
+        "frame-ancestors": "'none'",
+        "object-src": "'none'",
+        "font-src": [
+          "'self'",
+          "data:"
+        ],
+        "img-src": [
+          "'self'",
+          "asset:",
+          "data:",
+          "blob:"
+        ],
+        "media-src": [
+          "'self'",
+          "asset:",
+          "data:",
+          "blob:"
+        ],
+        "style-src": [
+          "'self'",
+          "'unsafe-inline'"
+        ],
+        "connect-src": [
+          "'self'",
+          "ipc:",
+          "http://ipc.localhost",
+          "http://localhost:1420",
+          "ws://localhost:1420",
+          "http://127.0.0.1:1420",
+          "ws://127.0.0.1:1420"
+        ]
+      },
+      "capabilities": [
+        "main",
+        "dev"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ],
+    "resources": [
+      "resources/tdlib"
+    ]
+  }
+}
