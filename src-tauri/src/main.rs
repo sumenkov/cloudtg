@@ -43,6 +43,8 @@ fn main() {
     .plugin(tauri_plugin_clipboard_manager::init())
     .invoke_handler(tauri::generate_handler![
       commands::auth_status,
+      commands::app_check_update,
+      commands::app_open_url,
       commands::auth_start,
       commands::auth_submit_code,
       commands::auth_submit_password,

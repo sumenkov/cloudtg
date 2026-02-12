@@ -5,7 +5,43 @@ import { Hint } from "./common/Hint";
 
 const RECONCILE_SYNC_REQUIRED = "RECONCILE_SYNC_REQUIRED";
 
-export function Settings({ onClose }: { onClose?: () => void }) {
+const panelStyle: React.CSSProperties = {
+  padding: 14,
+  border: "1px solid #ddd",
+  borderRadius: 12,
+  background: "#fff"
+};
+
+const mutedTextStyle: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 12,
+  opacity: 0.72,
+  lineHeight: 1.45
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  maxWidth: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
+  padding: 10,
+  borderRadius: 10,
+  border: "1px solid #ccc"
+};
+
+const buttonStyle: React.CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 10
+};
+
+const groupStyle: React.CSSProperties = {
+  padding: 12,
+  border: "1px solid #eee",
+  borderRadius: 10,
+  background: "#fcfcfc"
+};
+
+export function Settings() {
   const {
     auth,
     setError,
@@ -75,398 +111,410 @@ export function Settings({ onClose }: { onClose?: () => void }) {
   const stepAuthReady = auth === "ready";
 
   return (
-    <div style={{ display: "grid", gap: 12, maxWidth: 760 }}>
+    <div style={{ display: "grid", gap: 14, maxWidth: 920 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <b style={{ fontSize: 18 }}>Настройки</b>
-        {onClose ? (
-          <button onClick={onClose} style={{ padding: 10, borderRadius: 10, opacity: 0.85 }}>
-            Закрыть
-          </button>
-        ) : null}
+        <b style={{ fontSize: 20 }}>Настройки</b>
       </div>
 
       {status ? (
-        <div style={{ padding: 10, borderRadius: 8, background: "#f6f6f6" }}>
-          {status}
-        </div>
+        <div style={{ ...panelStyle, background: "#f7f7f7", padding: 12 }}>{status}</div>
       ) : null}
 
-      <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10, background: "#fafafa" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <b>Быстрый старт</b>
-          <Hint text="Эти шаги помогают быстро понять, что уже готово для работы." />
+      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+        <div style={{ ...panelStyle, background: "#fafafa" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <b>Быстрый старт</b>
+            <Hint text="Эти шаги помогают быстро понять, что уже готово для работы." />
+          </div>
+          <div style={{ marginTop: 10, display: "grid", gap: 8, fontSize: 13 }}>
+            <div>{stepKeysConfigured ? "[x]" : "[ ]"} 1. Настроить API_ID / API_HASH</div>
+            <div>{stepTdlibReady ? "[x]" : "[ ]"} 2. Подготовить TDLib</div>
+            <div>{stepAuthReady ? "[x]" : "[ ]"} 3. Пройти авторизацию Telegram</div>
+            <div>{stepAuthReady ? "[x]" : "[ ]"} 4. Обновить файлы из Telegram на главном экране</div>
+          </div>
         </div>
-        <div style={{ marginTop: 8, display: "grid", gap: 6, fontSize: 13 }}>
-          <div>{stepKeysConfigured ? "[x]" : "[ ]"} 1. Настроить API_ID / API_HASH</div>
-          <div>{stepTdlibReady ? "[x]" : "[ ]"} 2. Подготовить TDLib</div>
-          <div>{stepAuthReady ? "[x]" : "[ ]"} 3. Пройти авторизацию Telegram</div>
-          <div>{stepAuthReady ? "[x]" : "[ ]"} 4. Обновить файлы из Telegram на главном экране</div>
+
+        <div style={{ ...panelStyle, background: "#fafafa" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <b>Текущее состояние</b>
+            <Hint text="Краткий статус ключей, TDLib и авторизации." />
+          </div>
+          <div style={{ marginTop: 10, display: "grid", gap: 8, fontSize: 13 }}>
+            <div>Ключи: {creds.available ? `доступны (${sourceLabel})` : creds.locked ? "заблокированы" : "не заданы"}</div>
+            <div>TDLib: {isError ? "ошибка" : isBuilding ? "подготовка" : stepTdlibReady ? "готово" : "ожидание"}</div>
+            <div>Авторизация: {stepAuthReady ? "выполнена" : "не выполнена"}</div>
+          </div>
         </div>
       </div>
 
-      <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
+      <div style={panelStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <b>Подключение Telegram</b>
-          <Hint text="Здесь задаются ключи Telegram API и путь к TDLib." />
+          <Hint text="API-ключи, хранение секретов и путь к TDLib." />
         </div>
 
-        <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-          <label>
-            API_ID
-            <input
-              value={apiId}
-              onChange={(e) => setApiId(e.target.value)}
-              placeholder="123456"
-              style={{ width: "100%", padding: 10 }}
-            />
-          </label>
-          <label>
-            API_HASH
-            <input
-              value={apiHash}
-              onChange={(e) => setApiHash(e.target.value)}
-              placeholder="abcdef..."
-              style={{ width: "100%", padding: 10 }}
-              type="password"
-            />
-          </label>
-
-          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-            />
-            Запомнить ключи
-          </label>
-
-          {remember ? (
-            <div style={{ display: "grid", gap: 8, padding: 10, border: "1px solid #eee", borderRadius: 8 }}>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>Где хранить ключи:</div>
-              <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+          <div style={groupStyle}>
+            <div style={{ fontSize: 12, opacity: 0.72, marginBottom: 8 }}>Ключи Telegram API</div>
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+              <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                API_ID
                 <input
-                  type="radio"
-                  name="storageMode"
-                  checked={storageMode === "keychain"}
-                  onChange={() => setStorageMode("keychain")}
+                  value={apiId}
+                  onChange={(e) => setApiId(e.target.value)}
+                  placeholder="123456"
+                  style={inputStyle}
                 />
-                Системное хранилище (рекомендуется)
               </label>
-              <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                API_HASH
                 <input
-                  type="radio"
-                  name="storageMode"
-                  checked={storageMode === "encrypted"}
-                  onChange={() => setStorageMode("encrypted")}
-                />
-                Зашифрованный файл
-              </label>
-              <label>
-                {storageMode === "encrypted"
-                  ? "Пароль для шифрования (обязательно)"
-                  : "Пароль для шифрования (если keychain недоступен)"}
-                <input
-                  value={encryptPassword}
-                  onChange={(e) => setEncryptPassword(e.target.value)}
-                  placeholder="пароль"
-                  style={{ width: "100%", padding: 10 }}
+                  value={apiHash}
+                  onChange={(e) => setApiHash(e.target.value)}
+                  placeholder="abcdef..."
+                  style={inputStyle}
                   type="password"
                 />
               </label>
             </div>
-          ) : (
-            <div style={{ fontSize: 12, opacity: 0.7 }}>
-              Ключи будут использоваться только в текущем запуске.
-            </div>
-          )}
+          </div>
 
-          {!creds.keychain_available && remember && storageMode === "keychain" ? (
-            <div style={{ fontSize: 12, color: "#b04a00" }}>
-              Системное хранилище недоступно. Выбери режим «Зашифрованный файл» и задай пароль.
+          <div style={groupStyle}>
+            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+              />
+              Запомнить ключи
+            </label>
+
+            {remember ? (
+              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                <div style={{ fontSize: 12, opacity: 0.72 }}>Где хранить ключи:</div>
+                <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input
+                      type="radio"
+                      name="storageMode"
+                      checked={storageMode === "keychain"}
+                      onChange={() => setStorageMode("keychain")}
+                    />
+                    Системное хранилище (рекомендуется)
+                  </label>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input
+                      type="radio"
+                      name="storageMode"
+                      checked={storageMode === "encrypted"}
+                      onChange={() => setStorageMode("encrypted")}
+                    />
+                    Зашифрованный файл
+                  </label>
+                </div>
+                <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                  {storageMode === "encrypted"
+                    ? "Пароль для шифрования (обязательно)"
+                    : "Пароль для шифрования (если keychain недоступен)"}
+                  <input
+                    value={encryptPassword}
+                    onChange={(e) => setEncryptPassword(e.target.value)}
+                    placeholder="пароль"
+                    style={inputStyle}
+                    type="password"
+                  />
+                </label>
+              </div>
+            ) : (
+              <div style={mutedTextStyle}>Ключи будут использоваться только в текущем запуске.</div>
+            )}
+
+            {!creds.keychain_available && remember && storageMode === "keychain" ? (
+              <div style={{ marginTop: 8, fontSize: 12, color: "#b04a00" }}>
+                Системное хранилище недоступно. Выбери режим «Зашифрованный файл» и задай пароль.
+              </div>
+            ) : null}
+
+            {creds.available ? (
+              <div style={mutedTextStyle}>Ключи доступны. Источник: {sourceLabel}.</div>
+            ) : creds.locked ? (
+              <div style={mutedTextStyle}>Ключи сохранены в зашифрованном виде. Нужен пароль для разблокировки.</div>
+            ) : (
+              <div style={mutedTextStyle}>Ключи еще не заданы.</div>
+            )}
+          </div>
+
+          {creds.locked ? (
+            <div style={groupStyle}>
+              <b style={{ fontSize: 14 }}>Разблокировать ключи</b>
+              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                  <input
+                    value={unlockPassword}
+                    onChange={(e) => setUnlockPassword(e.target.value)}
+                    placeholder="пароль"
+                    style={inputStyle}
+                    type="password"
+                  />
+                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      setStatus("Разблокирую ключи...");
+                      await invokeSafe("settings_unlock_tg", { password: unlockPassword });
+                      setUnlockPassword("");
+                      await refreshSettings();
+                      await refreshAuth();
+                      setError(null);
+                      setStatus("Ключи разблокированы.");
+                    } catch (e: any) {
+                      setStatus("Не удалось разблокировать ключи");
+                      setError(String(e));
+                    }
+                  }}
+                  style={buttonStyle}
+                >
+                  Разблокировать
+                </button>
+              </div>
             </div>
           ) : null}
 
-          {creds.available ? (
-            <div style={{ fontSize: 12, opacity: 0.7 }}>
-              Ключи доступны. Источник: {sourceLabel}.
+          <div style={groupStyle}>
+            <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+              Путь к TDLib (libtdjson)
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                  <input
+                    value={tdlibPath}
+                    onChange={(e) => setTdlibPath(e.target.value)}
+                    placeholder="/полный/путь/к/libtdjson.so"
+                    style={inputStyle}
+                  />
+                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      setError(null);
+                      const picked = await invokeSafe<string | null>("tdlib_pick");
+                      if (picked) {
+                        setTdlibPath(picked);
+                      }
+                    } catch (e: any) {
+                      setError(String(e));
+                    }
+                  }}
+                  style={{ ...buttonStyle, whiteSpace: "nowrap" }}
+                >
+                  Открыть
+                </button>
+              </div>
+            </label>
+            <div style={mutedTextStyle}>
+              Можно оставить пустым: приложение попробует найти, скачать или собрать TDLib автоматически.
             </div>
-          ) : creds.locked ? (
-            <div style={{ fontSize: 12, opacity: 0.7 }}>
-              Ключи сохранены в зашифрованном виде. Нужен пароль для разблокировки.
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Ключи еще не заданы.</div>
-          )}
-        </div>
+          </div>
 
-        {creds.locked ? (
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eee", display: "grid", gap: 8 }}>
-            <b>Разблокировать ключи</b>
-            <input
-              value={unlockPassword}
-              onChange={(e) => setUnlockPassword(e.target.value)}
-              placeholder="пароль"
-              style={{ width: "100%", padding: 10 }}
-              type="password"
-            />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button
               onClick={async () => {
                 try {
-                  setStatus("Разблокирую ключи...");
-                  await invokeSafe("settings_unlock_tg", { password: unlockPassword });
-                  setUnlockPassword("");
+                  setSaving(true);
+                  setStatus("Сохраняю...");
+                  setError(null);
+                  const apiIdValue = apiId.trim();
+                  let apiIdNum: number | null = null;
+                  if (apiIdValue) {
+                    const parsed = Number.parseInt(apiIdValue, 10);
+                    if (!Number.isFinite(parsed) || parsed <= 0) {
+                      throw new Error("Некорректный API_ID");
+                    }
+                    apiIdNum = parsed;
+                  }
+                  if ((apiIdValue && !apiHash.trim()) || (!apiIdValue && apiHash.trim())) {
+                    throw new Error("Нужно заполнить и API_ID, и API_HASH");
+                  }
+                  if (remember && storageMode === "encrypted" && !encryptPassword.trim()) {
+                    throw new Error("Нужен пароль для шифрования");
+                  }
+                  if (remember && storageMode === "keychain" && !creds.keychain_available && !encryptPassword.trim()) {
+                    throw new Error(
+                      "Системное хранилище недоступно. Укажи пароль для шифрования или выбери режим «Зашифрованный файл»."
+                    );
+                  }
+                  const res = await invokeSafe<{ storage?: string | null; message: string }>("settings_set_tg", {
+                    input: {
+                      apiId: apiIdNum,
+                      apiHash: apiHash.trim() ? apiHash.trim() : null,
+                      remember,
+                      storageMode,
+                      password: remember ? (encryptPassword.trim() ? encryptPassword : null) : null,
+                      tdlibPath: tdlibPath.trim() ? tdlibPath.trim() : null
+                    }
+                  });
                   await refreshSettings();
                   await refreshAuth();
-                  setError(null);
-                  setStatus("Ключи разблокированы.");
+                  setStatus(res.message || "Настройки сохранены.");
+                  setApiId("");
+                  setApiHash("");
+                  setEncryptPassword("");
                 } catch (e: any) {
-                  setStatus("Не удалось разблокировать ключи");
+                  setStatus("Не удалось сохранить настройки");
                   setError(String(e));
+                } finally {
+                  setSaving(false);
                 }
               }}
-              style={{ padding: 10, borderRadius: 10 }}
+              disabled={saving}
+              style={buttonStyle}
             >
-              Разблокировать
+              Сохранить подключение
+            </button>
+
+            <button
+              onClick={async () => {
+                try {
+                  setTesting(true);
+                  setStatus("Отправляю тестовое сообщение...");
+                  await invokeSafe("tg_test_message");
+                  setStatus("Тестовое сообщение отправлено. Проверь канал CloudTG.");
+                } catch (e: any) {
+                  setStatus("Не удалось отправить тестовое сообщение");
+                  setError(String(e));
+                } finally {
+                  setTesting(false);
+                }
+              }}
+              disabled={testing}
+              style={{ ...buttonStyle, opacity: testing ? 0.6 : 1 }}
+            >
+              Проверить связь с Telegram
             </button>
           </div>
-        ) : null}
-
-        <div style={{ marginTop: 10 }}>
-          <label>
-            Путь к TDLib (libtdjson)
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                value={tdlibPath}
-                onChange={(e) => setTdlibPath(e.target.value)}
-                placeholder="/полный/путь/к/libtdjson.so"
-                style={{ flex: 1, padding: 10 }}
-              />
-              <button
-                onClick={async () => {
-                  try {
-                    setError(null);
-                    const picked = await invokeSafe<string | null>("tdlib_pick");
-                    if (picked) {
-                      setTdlibPath(picked);
-                    }
-                  } catch (e: any) {
-                    setError(String(e));
-                  }
-                }}
-                style={{ padding: 10, borderRadius: 10, opacity: 0.9, whiteSpace: "nowrap" }}
-              >
-                Открыть
-              </button>
-            </div>
-          </label>
-          <div style={{ opacity: 0.7, marginTop: 4, fontSize: 12 }}>
-            Можно оставить пустым: приложение попробует найти, скачать или собрать TDLib автоматически.
-          </div>
-        </div>
-
-        <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button
-            onClick={async () => {
-              try {
-                setSaving(true);
-                setStatus("Сохраняю...");
-                setError(null);
-                const apiIdValue = apiId.trim();
-                let apiIdNum: number | null = null;
-                if (apiIdValue) {
-                  const parsed = Number.parseInt(apiIdValue, 10);
-                  if (!Number.isFinite(parsed) || parsed <= 0) {
-                    throw new Error("Некорректный API_ID");
-                  }
-                  apiIdNum = parsed;
-                }
-                if ((apiIdValue && !apiHash.trim()) || (!apiIdValue && apiHash.trim())) {
-                  throw new Error("Нужно заполнить и API_ID, и API_HASH");
-                }
-                if (remember && storageMode === "encrypted" && !encryptPassword.trim()) {
-                  throw new Error("Нужен пароль для шифрования");
-                }
-                if (remember && storageMode === "keychain" && !creds.keychain_available && !encryptPassword.trim()) {
-                  throw new Error(
-                    "Системное хранилище недоступно. Укажи пароль для шифрования или выбери режим «Зашифрованный файл»."
-                  );
-                }
-                const res = await invokeSafe<{ storage?: string | null; message: string }>("settings_set_tg", {
-                  input: {
-                    apiId: apiIdNum,
-                    apiHash: apiHash.trim() ? apiHash.trim() : null,
-                    remember,
-                    storageMode,
-                    password: remember ? (encryptPassword.trim() ? encryptPassword : null) : null,
-                    tdlibPath: tdlibPath.trim() ? tdlibPath.trim() : null
-                  }
-                });
-                await refreshSettings();
-                await refreshAuth();
-                setStatus(res.message || "Настройки сохранены.");
-                setApiId("");
-                setApiHash("");
-                setEncryptPassword("");
-              } catch (e: any) {
-                setStatus("Не удалось сохранить настройки");
-                setError(String(e));
-              } finally {
-                setSaving(false);
-              }
-            }}
-            disabled={saving}
-            style={{ padding: 10, borderRadius: 10 }}
-          >
-            Сохранить подключение
-          </button>
-
-          <button
-            onClick={async () => {
-              try {
-                setTesting(true);
-                setStatus("Отправляю тестовое сообщение...");
-                await invokeSafe("tg_test_message");
-                setStatus("Тестовое сообщение отправлено. Проверь канал CloudTG.");
-              } catch (e: any) {
-                setStatus("Не удалось отправить тестовое сообщение");
-                setError(String(e));
-              } finally {
-                setTesting(false);
-              }
-            }}
-            disabled={testing}
-            style={{ padding: 10, borderRadius: 10, opacity: testing ? 0.6 : 1 }}
-          >
-            Проверить связь с Telegram
-          </button>
         </div>
       </div>
 
-      <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
+      <div style={panelStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <b>Обслуживание хранилища</b>
           <Hint text="Проверка целостности отмечает поврежденные записи, бэкап сохраняет локальную базу в отдельный канал." />
         </div>
 
-        <div style={{ marginTop: 10, padding: 10, border: "1px solid #eee", borderRadius: 8 }}>
-          <b>Проверка целостности последних сообщений</b>
-          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-            Проверяет последние сообщения в канале хранения и помечает битые записи.
-          </div>
-          <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <input
-              value={integrityLimit}
-              onChange={(e) => setIntegrityLimit(e.target.value)}
-              placeholder="100"
-              style={{ width: 120, padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
-            />
-            <button
-              onClick={async () => {
-                try {
-                  setIntegrityBusy(true);
-                  setIntegrityStatus("Проверяю...");
-                  const limitValue = Number.parseInt(integrityLimit.trim() || "100", 10);
-                  if (!Number.isFinite(limitValue) || limitValue <= 0) {
-                    throw new Error("Некорректный лимит сообщений");
-                  }
+        <div style={{ marginTop: 12, display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
+          <div style={groupStyle}>
+            <b style={{ fontSize: 14 }}>Проверка целостности последних сообщений</b>
+            <div style={mutedTextStyle}>Проверяет последние сообщения в канале хранения и помечает битые записи.</div>
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                value={integrityLimit}
+                onChange={(e) => setIntegrityLimit(e.target.value)}
+                placeholder="100"
+                style={{ ...inputStyle, width: 120 }}
+              />
+              <button
+                onClick={async () => {
                   try {
-                    const res = await invokeSafe<{ message: string }>("tg_reconcile_recent", { limit: limitValue });
-                    setIntegrityStatus(res.message || "Готово.");
-                    await refreshTree();
-                  } catch (e: any) {
-                    const msg = String(e);
-                    if (msg.includes(RECONCILE_SYNC_REQUIRED)) {
-                      const ok = window.confirm(
-                        "Импорт из канала хранения еще не запускался. Проверка может пропустить старые сообщения. Продолжить?"
-                      );
-                      if (!ok) {
-                        setIntegrityStatus("Проверка отменена.");
-                        return;
-                      }
-                      const res = await invokeSafe<{ message: string }>("tg_reconcile_recent", {
-                        limit: limitValue,
-                        force: true
-                      });
+                    setIntegrityBusy(true);
+                    setIntegrityStatus("Проверяю...");
+                    const limitValue = Number.parseInt(integrityLimit.trim() || "100", 10);
+                    if (!Number.isFinite(limitValue) || limitValue <= 0) {
+                      throw new Error("Некорректный лимит сообщений");
+                    }
+                    try {
+                      const res = await invokeSafe<{ message: string }>("tg_reconcile_recent", { limit: limitValue });
                       setIntegrityStatus(res.message || "Готово.");
                       await refreshTree();
-                    } else {
-                      setIntegrityStatus("Не удалось выполнить проверку");
-                      setError(msg);
+                    } catch (e: any) {
+                      const msg = String(e);
+                      if (msg.includes(RECONCILE_SYNC_REQUIRED)) {
+                        const ok = window.confirm(
+                          "Импорт из канала хранения еще не запускался. Проверка может пропустить старые сообщения. Продолжить?"
+                        );
+                        if (!ok) {
+                          setIntegrityStatus("Проверка отменена.");
+                          return;
+                        }
+                        const res = await invokeSafe<{ message: string }>("tg_reconcile_recent", {
+                          limit: limitValue,
+                          force: true
+                        });
+                        setIntegrityStatus(res.message || "Готово.");
+                        await refreshTree();
+                      } else {
+                        setIntegrityStatus("Не удалось выполнить проверку");
+                        setError(msg);
+                      }
                     }
+                  } catch (e: any) {
+                    setIntegrityStatus("Не удалось выполнить проверку");
+                    setError(String(e));
+                  } finally {
+                    setIntegrityBusy(false);
                   }
-                } catch (e: any) {
-                  setIntegrityStatus("Не удалось выполнить проверку");
-                  setError(String(e));
-                } finally {
-                  setIntegrityBusy(false);
-                }
-              }}
-              disabled={integrityBusy}
-              style={{ padding: 10, borderRadius: 10 }}
-            >
-              Запустить проверку
-            </button>
-            {integrityStatus ? <div style={{ fontSize: 12, opacity: 0.75 }}>{integrityStatus}</div> : null}
+                }}
+                disabled={integrityBusy}
+                style={buttonStyle}
+              >
+                Запустить проверку
+              </button>
+            </div>
+            {integrityStatus ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>{integrityStatus}</div> : null}
           </div>
-        </div>
 
-        <div style={{ marginTop: 10, padding: 10, border: "1px solid #eee", borderRadius: 8 }}>
-          <b>Бэкап базы</b>
-          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-            Бэкап сохраняется в отдельный канал <b>CloudTG Backups</b>.
-          </div>
-          <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <button
-              onClick={async () => {
-                try {
-                  setBackupBusy(true);
-                  setBackupStatus("Создаю бэкап...");
-                  const res = await invokeSafe<{ message: string }>("backup_create");
-                  setBackupStatus(res.message || "Бэкап создан.");
-                } catch (e: any) {
-                  setBackupStatus("Не удалось создать бэкап");
-                  setError(String(e));
-                } finally {
-                  setBackupBusy(false);
-                }
-              }}
-              disabled={backupBusy}
-              style={{ padding: 10, borderRadius: 10 }}
-            >
-              Создать бэкап
-            </button>
-            <button
-              onClick={async () => {
-                try {
-                  setOpenBackupBusy(true);
-                  setBackupStatus("Открываю канал бэкапов...");
-                  const res = await invokeSafe<{ message: string }>("backup_open_channel");
-                  setBackupStatus(res.message || "Канал открыт.");
-                } catch (e: any) {
-                  setBackupStatus("Не удалось открыть канал");
-                  setError(String(e));
-                } finally {
-                  setOpenBackupBusy(false);
-                }
-              }}
-              disabled={openBackupBusy}
-              style={{ padding: 10, borderRadius: 10 }}
-            >
-              Открыть канал бэкапов
-            </button>
-            {backupStatus ? <div style={{ fontSize: 12, opacity: 0.75 }}>{backupStatus}</div> : null}
+          <div style={groupStyle}>
+            <b style={{ fontSize: 14 }}>Бэкап базы</b>
+            <div style={mutedTextStyle}>Бэкап сохраняется в отдельный канал <b>CloudTG Backups</b>.</div>
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                onClick={async () => {
+                  try {
+                    setBackupBusy(true);
+                    setBackupStatus("Создаю бэкап...");
+                    const res = await invokeSafe<{ message: string }>("backup_create");
+                    setBackupStatus(res.message || "Бэкап создан.");
+                  } catch (e: any) {
+                    setBackupStatus("Не удалось создать бэкап");
+                    setError(String(e));
+                  } finally {
+                    setBackupBusy(false);
+                  }
+                }}
+                disabled={backupBusy}
+                style={buttonStyle}
+              >
+                Создать бэкап
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    setOpenBackupBusy(true);
+                    setBackupStatus("Открываю канал бэкапов...");
+                    const res = await invokeSafe<{ message: string }>("backup_open_channel");
+                    setBackupStatus(res.message || "Канал открыт.");
+                  } catch (e: any) {
+                    setBackupStatus("Не удалось открыть канал");
+                    setError(String(e));
+                  } finally {
+                    setOpenBackupBusy(false);
+                  }
+                }}
+                disabled={openBackupBusy}
+                style={buttonStyle}
+              >
+                Открыть канал бэкапов
+              </button>
+            </div>
+            {backupStatus ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>{backupStatus}</div> : null}
           </div>
         </div>
       </div>
 
-      <div style={{ padding: 12, border: "1px solid #f3bcbc", borderRadius: 10, background: "#fff4f4" }}>
+      <div style={{ ...panelStyle, border: "1px solid #f3bcbc", background: "#fff4f4" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <b style={{ color: "#9d1f1f" }}>Опасные действия</b>
           <Hint text="Эти операции могут изменить структуру хранения или потребовать перезапуск приложения." />
         </div>
-        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
-          Используй только если понимаешь последствия.
-        </div>
+        <div style={mutedTextStyle}>Используй только если понимаешь последствия.</div>
         <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button
             onClick={async () => {
@@ -486,7 +534,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
               }
             }}
             disabled={restoreBusy}
-            style={{ padding: 10, borderRadius: 10, background: "#fef5e6", border: "1px solid #f2c185" }}
+            style={{ ...buttonStyle, background: "#fef5e6", border: "1px solid #f2c185" }}
           >
             Восстановить базу из бэкапа
           </button>
@@ -509,7 +557,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
               }
             }}
             disabled={creating}
-            style={{ padding: 10, borderRadius: 10, background: "#fee", border: "1px solid #f99" }}
+            style={{ ...buttonStyle, background: "#fee", border: "1px solid #f99" }}
           >
             Создать новый канал CloudTG
           </button>
@@ -519,8 +567,7 @@ export function Settings({ onClose }: { onClose?: () => void }) {
       {tdlibBuild.state && tdlibBuild.state !== "success" ? (
         <div
           style={{
-            padding: 12,
-            borderRadius: 10,
+            ...panelStyle,
             border: isError ? "1px solid #f99" : "1px solid #ddd",
             background: isError ? "#fee" : "#fafafa"
           }}
@@ -528,12 +575,10 @@ export function Settings({ onClose }: { onClose?: () => void }) {
           <b>Статус TDLib</b>
           <div style={{ marginTop: 6 }}>{tdlibBuild.message}</div>
           {isBuilding ? (
-            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-              Идет подготовка TDLib. Прогресс отображается на главном экране.
-            </div>
+            <div style={mutedTextStyle}>Идет подготовка TDLib. Прогресс отображается на главном экране.</div>
           ) : null}
           {isSuccess && tdlibBuild.detail ? (
-            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>Файл: {tdlibBuild.detail}</div>
+            <div style={mutedTextStyle}>Файл: {tdlibBuild.detail}</div>
           ) : null}
           {isError && tdlibBuild.detail ? (
             <pre style={{ marginTop: 8, whiteSpace: "pre-wrap", fontSize: 12 }}>{tdlibBuild.detail}</pre>

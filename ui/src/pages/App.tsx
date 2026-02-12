@@ -13,6 +13,14 @@ import {
   runSyncOnce
 } from "./appLifecycle";
 
+type AppUpdateInfo = {
+  current_version: string;
+  latest_version: string | null;
+  has_update: boolean;
+  download_url: string | null;
+  release_url: string | null;
+};
+
 export default function App() {
   const {
     auth,
@@ -33,6 +41,7 @@ export default function App() {
   } = useAppStore();
   const [showSettings, setShowSettings] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const syncStartedRef = useRef(false);
   const progressValue =
     tdlibBuild.progress === null ? null : Math.max(0, Math.min(100, tdlibBuild.progress));
@@ -147,6 +156,14 @@ export default function App() {
       } catch {
         // Ignore version read errors, UI can work without it.
       }
+      try {
+        const update = await invokeSafe<AppUpdateInfo>("app_check_update");
+        if (active && update.has_update) {
+          setAppUpdate(update);
+        }
+      } catch {
+        // Ignore update check errors to avoid noisy UX when offline.
+      }
     })();
     return () => {
       active = false;
@@ -169,16 +186,54 @@ export default function App() {
         </div>
         <button
           onClick={() => {
-            setShowSettings((v) => !v);
+            if (showSettings) {
+              setShowSettings(false);
+              return;
+            }
+            setShowSettings(true);
           }}
           style={{ padding: "8px 12px", borderRadius: 10 }}
         >
-          Настройки
+          {showSettings ? "Закрыть" : "Настройки"}
         </button>
       </div>
       <p style={{ marginTop: 0, opacity: 0.8 }}>
         Добро пожаловать в CloudTG. Здесь можно хранить, искать и открывать файлы из Telegram как в обычном файловом менеджере.
       </p>
+
+      {appUpdate?.has_update ? (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 12,
+            borderRadius: 10,
+            border: "1px solid #9fd39f",
+            background: "#f4fff4"
+          }}
+        >
+          <b>Доступна новая версия: {appUpdate.latest_version ?? "latest"}</b>
+          <div style={{ marginTop: 4, fontSize: 12, opacity: 0.8 }}>
+            Текущая версия: {appUpdate.current_version}
+          </div>
+          {appUpdate.download_url ? (
+            <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button
+                onClick={async () => {
+                  try {
+                    await invokeSafe("app_open_url", { url: appUpdate.download_url });
+                  } catch (e: any) {
+                    setError(String(e));
+                  }
+                }}
+                style={{ padding: "8px 12px", borderRadius: 10 }}
+              >
+                Скачать
+              </button>
+              <span style={{ fontSize: 12, opacity: 0.8 }}>{appUpdate.download_url}</span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {tdlibBuild.state && tdlibBuild.state !== "success" ? (
         <div
@@ -333,11 +388,7 @@ export default function App() {
       ) : null}
 
       {showSettings ? (
-        <Settings
-          onClose={() => {
-            setShowSettings(false);
-          }}
-        />
+        <Settings />
       ) : auth !== "ready" ? (
         <Login />
       ) : (
