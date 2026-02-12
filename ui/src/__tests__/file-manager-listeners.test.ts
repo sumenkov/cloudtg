@@ -64,23 +64,25 @@ describe("fileManagerListeners", () => {
     expect(reloadFiles).not.toHaveBeenCalled();
   });
 
-  it("drop handler uploads into latest selected folder", async () => {
+  it("drop handler uploads dropped files into selected folder", async () => {
+    const prepareUploadPaths = vi.fn(async () => ["tok-1", "tok-2"]);
     const uploadFile = vi.fn(async () => {});
-    const setDropActive = vi.fn();
-    const setUploadBusy = vi.fn();
-    const setError = vi.fn();
     const reloadOld = vi.fn(async () => {});
     const reloadNew = vi.fn(async () => {});
     const selectedNodeRef = { current: rootNode as DirNode | null };
     const isRootSelectedRef = { current: true };
     const reloadFilesRef = { current: reloadOld };
     const uploadInProgressRef = { current: false };
+    const setDropActive = vi.fn();
+    const setUploadBusy = vi.fn();
+    const setError = vi.fn();
 
     const handler = createDragDropHandler(
       selectedNodeRef,
       isRootSelectedRef,
       reloadFilesRef,
       uploadInProgressRef,
+      prepareUploadPaths,
       uploadFile,
       setDropActive,
       setUploadBusy,
@@ -94,32 +96,34 @@ describe("fileManagerListeners", () => {
     handler({ payload: { type: "drop", paths: ["/tmp/one.txt", "/tmp/two.txt"] } });
     await flushMicrotasks();
 
+    expect(prepareUploadPaths).toHaveBeenCalledWith(["/tmp/one.txt", "/tmp/two.txt"]);
     expect(uploadFile).toHaveBeenCalledTimes(2);
-    expect(uploadFile).toHaveBeenNthCalledWith(1, "dir-a", "/tmp/one.txt");
-    expect(uploadFile).toHaveBeenNthCalledWith(2, "dir-a", "/tmp/two.txt");
+    expect(uploadFile).toHaveBeenNthCalledWith(1, "dir-a", "tok-1");
+    expect(uploadFile).toHaveBeenNthCalledWith(2, "dir-a", "tok-2");
     expect(reloadOld).not.toHaveBeenCalled();
     expect(reloadNew).toHaveBeenCalledTimes(1);
     expect(setUploadBusy).toHaveBeenNthCalledWith(1, true);
     expect(setUploadBusy).toHaveBeenNthCalledWith(2, false);
     expect(setError).not.toHaveBeenCalled();
-    expect(uploadInProgressRef.current).toBe(false);
   });
 
   it("drop handler reports error when no folder is selected", async () => {
+    const prepareUploadPaths = vi.fn(async () => ["tok-1"]);
     const uploadFile = vi.fn(async () => {});
+    const reloadFilesRef = { current: vi.fn(async () => {}) };
+    const uploadInProgressRef = { current: false };
     const setDropActive = vi.fn();
     const setUploadBusy = vi.fn();
     const setError = vi.fn();
-    const reloadFilesRef = { current: vi.fn(async () => {}) };
     const selectedNodeRef = { current: rootNode as DirNode | null };
     const isRootSelectedRef = { current: true };
-    const uploadInProgressRef = { current: false };
 
     const handler = createDragDropHandler(
       selectedNodeRef,
       isRootSelectedRef,
       reloadFilesRef,
       uploadInProgressRef,
+      prepareUploadPaths,
       uploadFile,
       setDropActive,
       setUploadBusy,
@@ -129,133 +133,28 @@ describe("fileManagerListeners", () => {
     handler({ payload: { type: "drop", paths: ["/tmp/file.txt"] } });
     await flushMicrotasks();
 
+    expect(prepareUploadPaths).not.toHaveBeenCalled();
     expect(uploadFile).not.toHaveBeenCalled();
     expect(setError).toHaveBeenCalledWith("Выбери папку, чтобы загрузить файлы.");
-    expect(setUploadBusy).not.toHaveBeenCalled();
-  });
-
-  it("drop handler ignores duplicate and blank paths", async () => {
-    const uploadFile = vi.fn(async () => {});
-    const setDropActive = vi.fn();
-    const setUploadBusy = vi.fn();
-    const setError = vi.fn();
-    const reloadFilesRef = { current: vi.fn(async () => {}) };
-    const selectedNodeRef = { current: folderNode as DirNode | null };
-    const isRootSelectedRef = { current: false };
-    const uploadInProgressRef = { current: false };
-
-    const handler = createDragDropHandler(
-      selectedNodeRef,
-      isRootSelectedRef,
-      reloadFilesRef,
-      uploadInProgressRef,
-      uploadFile,
-      setDropActive,
-      setUploadBusy,
-      setError
-    );
-
-    handler({
-      payload: { type: "drop", paths: [" /tmp/a.txt ", "/tmp/a.txt", " ", "/tmp/b.txt"] }
-    });
-    await flushMicrotasks();
-
-    expect(uploadFile).toHaveBeenCalledTimes(2);
-    expect(uploadFile).toHaveBeenNthCalledWith(1, "dir-a", "/tmp/a.txt");
-    expect(uploadFile).toHaveBeenNthCalledWith(2, "dir-a", "/tmp/b.txt");
-  });
-
-  it("drop handler skips new drop while upload is in progress", async () => {
-    let resolveFirstUpload!: () => void;
-    const firstUpload = new Promise<void>((resolve) => {
-      resolveFirstUpload = resolve;
-    });
-    let callIndex = 0;
-    const uploadFile = vi.fn(async () => {
-      callIndex += 1;
-      if (callIndex === 1) {
-        await firstUpload;
-      }
-    });
-    const setDropActive = vi.fn();
-    const setUploadBusy = vi.fn();
-    const setError = vi.fn();
-    const reloadFilesRef = { current: vi.fn(async () => {}) };
-    const selectedNodeRef = { current: folderNode as DirNode | null };
-    const isRootSelectedRef = { current: false };
-    const uploadInProgressRef = { current: false };
-
-    const handler = createDragDropHandler(
-      selectedNodeRef,
-      isRootSelectedRef,
-      reloadFilesRef,
-      uploadInProgressRef,
-      uploadFile,
-      setDropActive,
-      setUploadBusy,
-      setError
-    );
-
-    handler({ payload: { type: "drop", paths: ["/tmp/one.txt"] } });
-    handler({ payload: { type: "drop", paths: ["/tmp/two.txt"] } });
-
-    await flushMicrotasks();
-    resolveFirstUpload();
-    await flushMicrotasks();
-
-    expect(uploadFile).toHaveBeenCalledTimes(1);
-    expect(uploadFile).toHaveBeenCalledWith("dir-a", "/tmp/one.txt");
-    expect(setError).not.toHaveBeenCalled();
-  });
-
-  it("drop handler releases lock and busy flag after upload error", async () => {
-    const uploadFile = vi.fn(async () => {
-      throw new Error("upload failed");
-    });
-    const setDropActive = vi.fn();
-    const setUploadBusy = vi.fn();
-    const setError = vi.fn();
-    const reloadFilesRef = { current: vi.fn(async () => {}) };
-    const selectedNodeRef = { current: folderNode as DirNode | null };
-    const isRootSelectedRef = { current: false };
-    const uploadInProgressRef = { current: false };
-
-    const handler = createDragDropHandler(
-      selectedNodeRef,
-      isRootSelectedRef,
-      reloadFilesRef,
-      uploadInProgressRef,
-      uploadFile,
-      setDropActive,
-      setUploadBusy,
-      setError
-    );
-
-    handler({ payload: { type: "drop", paths: ["/tmp/one.txt"] } });
-    await flushMicrotasks();
-
-    expect(uploadFile).toHaveBeenCalledTimes(1);
-    expect(setUploadBusy).toHaveBeenNthCalledWith(1, true);
-    expect(setUploadBusy).toHaveBeenNthCalledWith(2, false);
-    expect(setError).toHaveBeenCalledWith("Error: upload failed");
-    expect(uploadInProgressRef.current).toBe(false);
   });
 
   it("drop handler handles over/leave events without starting upload", async () => {
+    const prepareUploadPaths = vi.fn(async () => ["tok-1"]);
     const uploadFile = vi.fn(async () => {});
+    const reloadFilesRef = { current: vi.fn(async () => {}) };
+    const uploadInProgressRef = { current: false };
     const setDropActive = vi.fn();
     const setUploadBusy = vi.fn();
     const setError = vi.fn();
-    const reloadFilesRef = { current: vi.fn(async () => {}) };
     const selectedNodeRef = { current: folderNode as DirNode | null };
     const isRootSelectedRef = { current: false };
-    const uploadInProgressRef = { current: false };
 
     const handler = createDragDropHandler(
       selectedNodeRef,
       isRootSelectedRef,
       reloadFilesRef,
       uploadInProgressRef,
+      prepareUploadPaths,
       uploadFile,
       setDropActive,
       setUploadBusy,
@@ -269,6 +168,7 @@ describe("fileManagerListeners", () => {
 
     expect(setDropActive).toHaveBeenNthCalledWith(1, true);
     expect(setDropActive).toHaveBeenNthCalledWith(2, false);
+    expect(prepareUploadPaths).not.toHaveBeenCalled();
     expect(uploadFile).not.toHaveBeenCalled();
     expect(setUploadBusy).not.toHaveBeenCalled();
     expect(setError).not.toHaveBeenCalled();

@@ -1,0 +1,17 @@
+{
+  "identifier": "dev",
+  "description": "Разрешения для dev-режима с Vite на localhost",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "clipboard-manager:allow-write-text"
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:1420/*",
+      "http://127.0.0.1:1420/*"
+    ]
+  }
+}

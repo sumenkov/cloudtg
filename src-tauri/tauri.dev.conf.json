@@ -86,7 +86,8 @@
         ]
       },
       "capabilities": [
-        "main"
+        "main",
+        "dev"
       ]
     }
   },

@@ -4,6 +4,7 @@ use crate::sqlx::{self, Row};
 use sqlx_sqlite::SqlitePool;
 use chrono::Utc;
 use serde::Deserialize;
+use ureq::Agent;
 use crate::state::{AppState, AuthState};
 use crate::app::{backup, dirs, sync, files, indexer, reconcile};
 use crate::settings;
@@ -72,6 +73,15 @@ pub struct BackupResult {
 }
 
 #[derive(serde::Serialize)]
+pub struct AppUpdateInfo {
+  pub current_version: String,
+  pub latest_version: Option<String>,
+  pub has_update: bool,
+  pub download_url: Option<String>,
+  pub release_url: Option<String>
+}
+
+#[derive(serde::Serialize)]
 pub struct RepairResult {
   pub ok: bool,
   pub message: String,
@@ -101,7 +111,78 @@ pub struct FileSearchInput {
   pub limit: Option<i64>
 }
 
+#[derive(Deserialize)]
+struct GithubReleaseAsset {
+  name: String,
+  browser_download_url: String
+}
+
+#[derive(Deserialize)]
+struct GithubRelease {
+  tag_name: String,
+  html_url: String,
+  assets: Vec<GithubReleaseAsset>
+}
+
 fn map_err(e: anyhow::Error) -> String { format!("{e:#}") }
+
+fn parse_github_repo_slug(url: &str) -> Option<String> {
+  let normalized = url.trim().trim_end_matches('/').trim_end_matches(".git");
+  let path = normalized
+    .strip_prefix("https://github.com/")
+    .or_else(|| normalized.strip_prefix("http://github.com/"))
+    .or_else(|| normalized.strip_prefix("git@github.com:"))?;
+  let mut parts = path.split('/').filter(|s| !s.is_empty());
+  let owner = parts.next()?;
+  let repo = parts.next()?;
+  Some(format!("{owner}/{repo}"))
+}
+
+fn parse_semver_triplet(version: &str) -> Option<(u64, u64, u64)> {
+  let core = version
+    .trim()
+    .trim_start_matches(['v', 'V'])
+    .split('+')
+    .next()?
+    .split('-')
+    .next()?;
+  let mut parts = core.split('.');
+  let major = parts.next()?.parse::<u64>().ok()?;
+  let minor = parts.next().unwrap_or("0").parse::<u64>().ok()?;
+  let patch = parts.next().unwrap_or("0").parse::<u64>().ok()?;
+  Some((major, minor, patch))
+}
+
+fn is_newer_version(candidate: &str, current: &str) -> bool {
+  match (parse_semver_triplet(candidate), parse_semver_triplet(current)) {
+    (Some(c), Some(cur)) => c > cur,
+    _ => candidate.trim() != current.trim()
+  }
+}
+
+fn preferred_asset_download_url(assets: &[GithubReleaseAsset]) -> Option<String> {
+  #[cfg(target_os = "windows")]
+  const PREFERRED_SUFFIXES: &[&str] = &[".msi", ".exe", ".zip"];
+  #[cfg(target_os = "macos")]
+  const PREFERRED_SUFFIXES: &[&str] = &[".dmg", ".pkg", ".zip"];
+  #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+  const PREFERRED_SUFFIXES: &[&str] = &[".AppImage", ".deb", ".rpm", ".tar.gz"];
+
+  for suffix in PREFERRED_SUFFIXES {
+    if let Some(asset) = assets.iter().find(|a| a.name.ends_with(suffix)) {
+      return Some(asset.browser_download_url.clone());
+    }
+  }
+  assets.first().map(|a| a.browser_download_url.clone())
+}
+
+fn github_api_agent() -> Agent {
+  ureq::Agent::config_builder()
+    .timeout_connect(Some(std::time::Duration::from_secs(10)))
+    .timeout_recv_body(Some(std::time::Duration::from_secs(20)))
+    .build()
+    .into()
+}
 
 fn emit_sync(app: &AppHandle, state: &str, message: &str, processed: i64, total: Option<i64>) {
   let payload = TgSyncStatus {
@@ -291,6 +372,59 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, Strin
 }
 
 #[tauri::command]
+pub async fn app_check_update() -> Result<AppUpdateInfo, String> {
+  tauri::async_runtime::spawn_blocking(|| {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let repo_url = env!("CARGO_PKG_REPOSITORY");
+    let repo_slug = parse_github_repo_slug(repo_url)
+      .ok_or_else(|| "Не удалось определить репозиторий приложения".to_string())?;
+    let api_url = format!("https://api.github.com/repos/{repo_slug}/releases/latest");
+
+    let response = github_api_agent()
+      .get(&api_url)
+      .header("User-Agent", "cloudtg")
+      .header("Accept", "application/vnd.github+json")
+      .call()
+      .map_err(|e| format!("Не удалось проверить обновления: {e}"))?;
+    let body = response
+      .into_body()
+      .read_to_string()
+      .map_err(|e| format!("Не удалось прочитать ответ сервера обновлений: {e}"))?;
+    let release: GithubRelease = serde_json::from_str(&body)
+      .map_err(|e| format!("Некорректный ответ сервера обновлений: {e}"))?;
+
+    let latest_version = release.tag_name.trim().to_string();
+    let has_update = is_newer_version(&latest_version, &current_version);
+    let release_url = if release.html_url.trim().is_empty() {
+      None
+    } else {
+      Some(release.html_url)
+    };
+    let download_url = preferred_asset_download_url(&release.assets).or_else(|| release_url.clone());
+
+    Ok(AppUpdateInfo {
+      current_version,
+      latest_version: Some(latest_version),
+      has_update,
+      download_url,
+      release_url
+    })
+  })
+    .await
+    .map_err(|e| format!("Не удалось выполнить проверку обновлений: {e}"))?
+}
+
+#[tauri::command]
+pub async fn app_open_url(url: String) -> Result<(), String> {
+  let url = url.trim().to_string();
+  if !(url.starts_with("https://") || url.starts_with("http://")) {
+    return Err("Разрешены только http(s) ссылки".into());
+  }
+  open_url_in_os(&url).map_err(map_err)?;
+  Ok(())
+}
+
+#[tauri::command]
 pub async fn auth_start(state: State<'_, AppState>, phone: String) -> Result<(), String> {
   info!(event = "auth_start", phone_masked = %mask_phone(&phone), "Запрос кода авторизации");
   let tg = state.telegram().map_err(map_err)?;
@@ -429,6 +563,18 @@ pub async fn file_pick() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+pub async fn file_pick_upload(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+  let files = rfd::FileDialog::new().pick_files().unwrap_or_default();
+  Ok(state.register_upload_paths(files))
+}
+
+#[tauri::command]
+pub async fn file_prepare_upload_paths(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<String>, String> {
+  let parsed = paths.into_iter().map(PathBuf::from).collect();
+  Ok(state.register_upload_paths(parsed))
+}
+
+#[tauri::command]
 pub async fn tdlib_pick() -> Result<Option<String>, String> {
   let dialog = rfd::FileDialog::new();
 
@@ -444,12 +590,15 @@ pub async fn tdlib_pick() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn file_upload(state: State<'_, AppState>, dir_id: String, path: String) -> Result<String, String> {
+pub async fn file_upload(state: State<'_, AppState>, dir_id: String, upload_token: String) -> Result<String, String> {
   info!(event = "file_upload", dir_id = dir_id.as_str(), "Загрузка файла");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
   let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
-  let id = files::upload_file(db.pool(), tg.as_ref(), chat_id, &dir_id, Path::new(&path)).await.map_err(map_err)?;
+  let Some(path) = state.consume_upload_path(&upload_token) else {
+    return Err("Файл не подтвержден. Выбери файл через кнопку «Выбрать и загрузить» и повтори попытку.".into());
+  };
+  let id = files::upload_file(db.pool(), tg.as_ref(), chat_id, &dir_id, path.as_path()).await.map_err(map_err)?;
   Ok(id)
 }
 
@@ -474,14 +623,31 @@ pub async fn file_delete(state: State<'_, AppState>, file_id: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn file_repair(state: State<'_, AppState>, file_id: String, path: Option<String>) -> Result<RepairResult, String> {
+pub async fn file_repair(
+  state: State<'_, AppState>,
+  file_id: String,
+  upload_token: Option<String>
+) -> Result<RepairResult, String> {
   info!(event = "file_repair", file_id = file_id.as_str(), "Восстановление файла");
   let db = state.db().map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
   let paths = state.paths().map_err(map_err)?;
   let chat_id = ensure_storage_chat_id(&state).await.map_err(map_err)?;
-  let path = path.as_deref().map(std::path::Path::new);
-  let outcome = files::repair_file(db.pool(), tg.as_ref(), &paths, chat_id, &file_id, path)
+  let selected_path = if let Some(token) = upload_token {
+    Some(state.consume_upload_path(&token).ok_or_else(|| {
+      "Файл не подтвержден. Выбери файл через кнопку «Выбрать» и повтори попытку.".to_string()
+    })?)
+  } else {
+    None
+  };
+  let outcome = files::repair_file(
+    db.pool(),
+    tg.as_ref(),
+    &paths,
+    chat_id,
+    &file_id,
+    selected_path.as_deref()
+  )
     .await
     .map_err(map_err)?;
   match outcome {

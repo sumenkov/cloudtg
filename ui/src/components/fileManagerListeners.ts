@@ -40,7 +40,8 @@ export function createDragDropHandler(
   isRootSelectedRef: RefValue<boolean>,
   reloadFilesRef: RefValue<() => Promise<void>>,
   uploadInProgressRef: RefValue<boolean>,
-  uploadFile: (dirId: string, path: string) => Promise<void>,
+  prepareUploadPaths: (paths: string[]) => Promise<string[]>,
+  uploadFile: (dirId: string, uploadToken: string) => Promise<void>,
   setDropActive: (active: boolean) => void,
   setUploadBusy: (busy: boolean) => void,
   setError: (message: string) => void
@@ -68,14 +69,17 @@ export function createDragDropHandler(
       setError("Выбери папку, чтобы загрузить файлы.");
       return;
     }
+
     if (uploadInProgressRef.current) return;
     uploadInProgressRef.current = true;
     setUploadBusy(true);
 
     void (async () => {
       try {
-        for (const path of paths) {
-          await uploadFile(currentNode.id, path);
+        const uploadTokens = await prepareUploadPaths(paths);
+        if (uploadTokens.length === 0) return;
+        for (const uploadToken of uploadTokens) {
+          await uploadFile(currentNode.id, uploadToken);
         }
         await reloadFilesRef.current();
       } catch (e: any) {

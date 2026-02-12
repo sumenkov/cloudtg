@@ -35,7 +35,8 @@ struct TdlibConfig {
   api_id: i32,
   api_hash: String,
   db_dir: PathBuf,
-  files_dir: PathBuf
+  files_dir: PathBuf,
+  db_encryption_key: String
 }
 
 impl TdlibConfig {
@@ -49,8 +50,9 @@ impl TdlibConfig {
     let files_dir = paths.cache_dir.join("tdlib_files").join(session_name);
     std::fs::create_dir_all(&db_dir)?;
     std::fs::create_dir_all(&files_dir)?;
+    let db_encryption_key = crate::secrets::tdlib_db_encryption_key(paths)?;
 
-    Ok(Self { api_id, api_hash, db_dir, files_dir })
+    Ok(Self { api_id, api_hash, db_dir, files_dir, db_encryption_key })
   }
 }
 
@@ -2254,6 +2256,86 @@ fn http_agent() -> ureq::Agent {
     .into()
 }
 
+fn allow_unsafe_tdlib_urls() -> bool {
+  std::env::var("CLOUDTG_ALLOW_UNSAFE_TDLIB_URLS")
+    .ok()
+    .map(|v| {
+      let v = v.trim().to_ascii_lowercase();
+      v == "1" || v == "true" || v == "yes"
+    })
+    .unwrap_or(false)
+}
+
+fn extract_https_host(url: &str) -> Option<String> {
+  let trimmed = url.trim();
+  let rest = trimmed.strip_prefix("https://")?;
+  let host_port = rest.split(&['/', '?', '#'][..]).next()?.trim();
+  if host_port.is_empty() || host_port.contains('@') {
+    return None;
+  }
+  let host = host_port
+    .split(':')
+    .next()
+    .unwrap_or("")
+    .trim_matches(&['[', ']'][..])
+    .to_ascii_lowercase();
+  if host.is_empty() {
+    None
+  } else {
+    Some(host)
+  }
+}
+
+fn is_trusted_tdlib_host(host: &str) -> bool {
+  matches!(
+    host,
+    "github.com"
+      | "api.github.com"
+      | "raw.githubusercontent.com"
+      | "objects.githubusercontent.com"
+      | "github-releases.githubusercontent.com"
+      | "githubusercontent.com"
+      | "codeload.github.com"
+  ) || host.ends_with(".githubusercontent.com")
+}
+
+fn validate_tdlib_download_url(url: &str, label: &str) -> anyhow::Result<()> {
+  let Some(host) = extract_https_host(url) else {
+    return Err(anyhow::anyhow!(
+      "{label}: разрешены только корректные https URL"
+    ));
+  };
+
+  if allow_unsafe_tdlib_urls() {
+    tracing::warn!(
+      event = "tdlib_download_url_unsafe_allowed",
+      host = host.as_str(),
+      label = label,
+      "Разрешен небезопасный URL для загрузки TDLib по env CLOUDTG_ALLOW_UNSAFE_TDLIB_URLS"
+    );
+    return Ok(());
+  }
+
+  if !is_trusted_tdlib_host(&host) {
+    return Err(anyhow::anyhow!(
+      "{label}: недоверенный хост '{host}'. Разреши явно через CLOUDTG_ALLOW_UNSAFE_TDLIB_URLS=1"
+    ));
+  }
+
+  Ok(())
+}
+
+fn normalize_expected_sha256(expected_sha256: Option<&str>) -> anyhow::Result<String> {
+  let expected = expected_sha256
+    .map(str::trim)
+    .filter(|v| !v.is_empty())
+    .ok_or_else(|| anyhow::anyhow!("Манифест TDLib не содержит обязательный sha256"))?;
+  if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+    return Err(anyhow::anyhow!("Некорректный формат sha256 в манифесте TDLib"));
+  }
+  Ok(expected.to_ascii_lowercase())
+}
+
 fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
   let mut stack = vec![root.to_path_buf()];
   let exact_names = [
@@ -2287,8 +2369,10 @@ fn find_tdjson_lib(root: &Path) -> Option<PathBuf> {
 
 fn resolve_tdlib_manifest_url(repo: &str) -> anyhow::Result<Option<String>> {
   if let Ok(url) = std::env::var("CLOUDTG_TDLIB_MANIFEST_URL") {
-    if !url.trim().is_empty() {
-      return Ok(Some(url));
+    let url = url.trim();
+    if !url.is_empty() {
+      validate_tdlib_download_url(url, "URL манифеста TDLib")?;
+      return Ok(Some(url.to_string()));
     }
   }
 
@@ -2348,6 +2432,7 @@ fn find_manifest_url(release: &Value) -> Option<String> {
 }
 
 fn fetch_tdlib_manifest(url: &str) -> anyhow::Result<TdlibManifest> {
+  validate_tdlib_download_url(url, "URL манифеста TDLib")?;
   let agent = http_agent();
   let mut req = agent.get(url).header("User-Agent", "cloudtg");
   if let Some(token) = github_token() {
@@ -2365,6 +2450,8 @@ fn download_tdlib_asset(
   total_hint: Option<u64>,
   app: &tauri::AppHandle
 ) -> anyhow::Result<NamedTempFile> {
+  validate_tdlib_download_url(url, "URL артефакта TDLib")?;
+  let expected_sha256 = normalize_expected_sha256(expected_sha256)?;
   let agent = http_agent();
   let mut req = agent.get(url).header("User-Agent", "cloudtg");
   if let Some(token) = github_token() {
@@ -2403,11 +2490,20 @@ fn download_tdlib_asset(
     }
   }
 
-  if let Some(expected) = expected_sha256 {
-    let digest = hex::encode(hasher.finalize());
-    if digest.to_lowercase() != expected.trim().to_lowercase() {
-      return Err(anyhow::anyhow!("Checksum TDLib не совпадает"));
+  if let Some(total) = total {
+    if downloaded != total {
+      return Err(anyhow::anyhow!("Размер скачанного файла TDLib не совпадает с Content-Length"));
     }
+  }
+  if let Some(hint) = total_hint {
+    if downloaded != hint {
+      return Err(anyhow::anyhow!("Размер скачанного файла TDLib не совпадает с размером из манифеста"));
+    }
+  }
+
+  let digest = hex::encode(hasher.finalize()).to_ascii_lowercase();
+  if digest != expected_sha256 {
+    return Err(anyhow::anyhow!("Checksum TDLib не совпадает"));
   }
 
   Ok(tmp)
@@ -2762,9 +2858,17 @@ fn handle_auth_state(
       }
     }
     "authorizationStateWaitEncryptionKey" => {
-      let payload = json!({"@type":"checkDatabaseEncryptionKey","encryption_key":""}).to_string();
-      let _ = client.send(&payload);
-      set_auth_state(app, AuthState::Unknown, last_state);
+      if let Some(cfg) = config.as_ref() {
+        let payload = json!({
+          "@type":"checkDatabaseEncryptionKey",
+          "encryption_key": cfg.db_encryption_key.as_str()
+        })
+        .to_string();
+        let _ = client.send(&payload);
+        set_auth_state(app, AuthState::Unknown, last_state);
+      } else {
+        set_auth_state(app, AuthState::WaitConfig, last_state);
+      }
     }
     "authorizationStateWaitPhoneNumber" => {
       set_auth_state(app, AuthState::WaitPhone, last_state);

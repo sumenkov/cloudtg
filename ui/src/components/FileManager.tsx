@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAppStore, DirNode, ChatItem, FileItem } from "../store/app";
 import { listenSafe } from "../tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createDragDropHandler, createTreeUpdatedHandler, normalizeUploadPaths } from "./fileManagerListeners";
+import { createDragDropHandler, createTreeUpdatedHandler } from "./fileManagerListeners";
 import { TreePanel } from "./file-manager/TreePanel";
 import { SearchPanel } from "./file-manager/SearchPanel";
 import { SharePanel } from "./file-manager/SharePanel";
@@ -58,7 +58,8 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     files,
     refreshFiles,
     searchFiles,
-    pickFiles,
+    pickUploadFiles,
+    prepareUploadPaths,
     uploadFile,
     moveFiles,
     deleteFiles,
@@ -95,6 +96,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const isRootSelectedRef = useRef<boolean>(false);
   const reloadFilesRef = useRef<() => Promise<void>>(async () => {});
   const uploadInProgressRef = useRef<boolean>(false);
+  const prevSelectedNodeIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!tree) return;
@@ -229,6 +231,15 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     }
   }, [canUseFiles, activeTab]);
 
+  useEffect(() => {
+    const currentId = selectedNode?.id ?? null;
+    const previousId = prevSelectedNodeIdRef.current;
+    if (currentId && currentId !== "ROOT" && previousId === "ROOT" && activeTab === "folders") {
+      setActiveTab("files");
+    }
+    prevSelectedNodeIdRef.current = currentId;
+  }, [selectedNode?.id, activeTab]);
+
   selectedNodeRef.current = selectedNode;
   isRootSelectedRef.current = isRootSelected;
   reloadFilesRef.current = reloadFiles;
@@ -273,6 +284,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       isRootSelectedRef,
       reloadFilesRef,
       uploadInProgressRef,
+      prepareUploadPaths,
       uploadFile,
       setDropActive,
       setUploadBusy,
@@ -294,7 +306,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
       disposed = true;
       if (unlisten) unlisten();
     };
-  }, [uploadFile, setError]);
+  }, [prepareUploadPaths, uploadFile, setError]);
 
   const fileMoveOptions = useMemo(() => {
     if (!tree) return [];
@@ -374,9 +386,9 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const onFileRepair = async (file: FileItem) => {
     let res = await repairFile(file.id);
     if (!res.ok && res.code === REPAIR_NEED_FILE) {
-      const paths = await pickFiles();
-      if (!paths || paths.length === 0) return;
-      res = await repairFile(file.id, paths[0]);
+      const uploadTokens = await pickUploadFiles();
+      if (!uploadTokens || uploadTokens.length === 0) return;
+      res = await repairFile(file.id, uploadTokens[0]);
     }
     if (!res.ok) {
       setError(res.message);
@@ -651,11 +663,10 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                       uploadInProgressRef.current = true;
                       setUploadBusy(true);
                       try {
-                        const paths = await pickFiles();
-                        const uniquePaths = normalizeUploadPaths(paths);
-                        if (uniquePaths.length === 0) return;
-                        for (const path of uniquePaths) {
-                          await uploadFile(selectedNode.id, path);
+                        const uploadTokens = await pickUploadFiles();
+                        if (uploadTokens.length === 0) return;
+                        for (const uploadToken of uploadTokens) {
+                          await uploadFile(selectedNode.id, uploadToken);
                         }
                         await reloadFiles();
                       } catch (e: any) {
