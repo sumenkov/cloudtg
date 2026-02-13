@@ -19,8 +19,8 @@ CloudTG — настольное приложение, которое превр
 - управление файлами в формате «файлового менеджера», а не «чат-ленты».
 
 Подробная справка по функциям и навигации:
-- `docs/HELP.md`
-- Где получить `API_ID` и `API_HASH`: `docs/HELP.md` -> `3.2 Где взять API_ID и API_HASH`
+- [docs/HELP.md](docs/HELP.md)
+- Где получить `API_ID` и `API_HASH`: [docs/HELP.md](docs/HELP.md) -> `3.2 Где взять API_ID и API_HASH`
 
 ## Скачать и запустить
 - Windows (portable `.zip`): [CloudTG-windows-portable-x86_64.zip](https://github.com/sumenkov/cloudtg/releases/latest/download/CloudTG-windows-portable-x86_64.zip)
