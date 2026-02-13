@@ -245,6 +245,7 @@ export default function App() {
   } = useAppStore();
   const [showSettings, setShowSettings] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -260,10 +261,8 @@ export default function App() {
     setError(null);
   }, [error, setError]);
   const handleLogout = useCallback(async () => {
-    if (!window.confirm("Выйти из Telegram в CloudTG?")) {
-      return;
-    }
     try {
+      setShowLogoutConfirm(false);
       setLogoutBusy(true);
       setError(null);
       await invokeSafe("auth_logout");
@@ -291,6 +290,14 @@ export default function App() {
       setHelpBusy(false);
     }
   }, [helpText, setError]);
+  const handleCloseSettings = useCallback(async () => {
+    try {
+      await refreshAuth();
+    } catch (e: any) {
+      setError(String(e));
+    }
+    setShowSettings(false);
+  }, [refreshAuth, setError]);
 
   useEffect(() => {
     const disposedRef = { current: false };
@@ -477,53 +484,37 @@ export default function App() {
           }
         `}
       </style>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: showSettings ? "flex-start" : "space-between", alignItems: "center" }}>
         <div>
           <h1 style={{ marginBottom: 4 }}>CloudTG</h1>
           {appVersion ? <div style={{ fontSize: 12, opacity: 0.65 }}>v{appVersion}</div> : null}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <button
-            onClick={() => {
-              void handleOpenHelp();
-            }}
-            disabled={helpBusy}
-            style={{ padding: "8px 12px", borderRadius: 10, opacity: helpBusy ? 0.7 : 1, cursor: helpBusy ? "wait" : "pointer" }}
-          >
-            {helpBusy ? "Загружаю..." : "Справка"}
-          </button>
-          {auth === "ready" ? (
+        {!showSettings ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
             <button
-              onClick={handleLogout}
-              disabled={logoutBusy}
-              style={{ padding: "8px 12px", borderRadius: 10, opacity: logoutBusy ? 0.7 : 1, cursor: logoutBusy ? "wait" : "pointer" }}
+              onClick={() => {
+                void handleOpenHelp();
+              }}
+              disabled={helpBusy}
+              style={{ padding: "8px 12px", borderRadius: 10, opacity: helpBusy ? 0.7 : 1, cursor: helpBusy ? "wait" : "pointer" }}
             >
-              {logoutBusy ? "Выхожу..." : "Выйти"}
+              {helpBusy ? "Загружаю..." : "Справка"}
             </button>
-          ) : null}
-          <button
-            onClick={async () => {
-              if (showSettings) {
-                try {
-                  await refreshAuth();
-                } catch (e: any) {
-                  setError(String(e));
-                }
-                setShowSettings(false);
-                return;
-              }
-              setShowSettings(true);
-            }}
-            disabled={logoutBusy}
-            style={{ padding: "8px 12px", borderRadius: 10 }}
-          >
-            {showSettings ? "Закрыть" : "Настройки"}
-          </button>
-        </div>
+            <button
+              onClick={() => setShowSettings(true)}
+              disabled={logoutBusy}
+              style={{ padding: "8px 12px", borderRadius: 10 }}
+            >
+              Настройки
+            </button>
+          </div>
+        ) : null}
       </div>
-      <p style={{ marginTop: 0, opacity: 0.8 }}>
-        Добро пожаловать в CloudTG. Здесь можно хранить, искать и открывать файлы из Telegram как в обычном файловом менеджере.
-      </p>
+      {!showSettings ? (
+        <p style={{ marginTop: 0, opacity: 0.8 }}>
+          Добро пожаловать в CloudTG. Здесь можно хранить, искать и открывать файлы из Telegram как в обычном файловом менеджере.
+        </p>
+      ) : null}
 
       {appUpdate?.has_update ? (
         <div
@@ -712,12 +703,81 @@ export default function App() {
       ) : null}
 
       {showSettings ? (
-        <Settings />
+        <Settings
+          onRequestHelp={() => {
+            void handleOpenHelp();
+          }}
+          helpBusy={helpBusy}
+          onRequestClose={() => {
+            void handleCloseSettings();
+          }}
+          onRequestLogout={() => setShowLogoutConfirm(true)}
+          logoutBusy={logoutBusy}
+        />
       ) : auth !== "ready" ? (
         <Login />
       ) : (
         <FileManager tree={tree} />
       )}
+
+      {showLogoutConfirm ? (
+        <div
+          onClick={() => {
+            if (!logoutBusy) {
+              setShowLogoutConfirm(false);
+            }
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 1001
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "min(560px, 100%)",
+              borderRadius: 12,
+              border: "1px solid #d9d9d9",
+              background: "#fff",
+              boxShadow: "0 24px 80px rgba(0,0,0,0.24)",
+              display: "grid",
+              gap: 12,
+              padding: 14
+            }}
+          >
+            <div>
+              <b>Выход из учетной записи</b>
+            </div>
+            <div style={{ fontSize: 14, lineHeight: 1.5 }}>
+              Вы выйдете из учетной записи Telegram в CloudTG. Программа не закроется, после выхода можно войти снова.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                disabled={logoutBusy}
+                style={{ padding: "8px 12px", borderRadius: 10 }}
+              >
+                Отмена
+              </button>
+              <button
+                onClick={() => {
+                  void handleLogout();
+                }}
+                disabled={logoutBusy}
+                style={{ padding: "8px 12px", borderRadius: 10, opacity: logoutBusy ? 0.7 : 1, cursor: logoutBusy ? "wait" : "pointer" }}
+              >
+                {logoutBusy ? "Выхожу..." : "Выйти из учетной записи"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showHelp ? (
         <div

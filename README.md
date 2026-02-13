@@ -20,6 +20,7 @@ CloudTG — настольное приложение, которое превр
 
 Подробная справка по функциям и навигации:
 - `docs/HELP.md`
+- Где получить `API_ID` и `API_HASH`: `docs/HELP.md` -> `3.2 Где взять API_ID и API_HASH`
 
 ## Скачать и запустить
 - Windows (portable `.zip`): [CloudTG-windows-portable-x86_64.zip](https://github.com/sumenkov/cloudtg/releases/latest/download/CloudTG-windows-portable-x86_64.zip)
@@ -58,6 +59,21 @@ npm test
 ```bash
 npm run rust:test
 ```
+
+## Вшитые ключи (для сборки)
+По умолчанию `API_ID` и `API_HASH` вводятся в UI и не вшиваются в бинарник.
+
+Если использовать режим вшитых ключей:
+- `CLOUDTG_EMBED_API_KEYS=1`
+- `CLOUDTG_API_ID=<...>`
+- `CLOUDTG_API_HASH=<...>`
+
+пример:
+```bash
+CLOUDTG_EMBED_API_KEYS=1 CLOUDTG_API_ID=123 CLOUDTG_API_HASH=... npm run tauri:build
+```
+
+Важно: такие ключи считаются публичными, их можно извлечь из бинарника.
 
 ## Поддержка
 - Issues: https://github.com/sumenkov/cloudtg/issues

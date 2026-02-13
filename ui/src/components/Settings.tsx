@@ -41,7 +41,21 @@ const groupStyle: React.CSSProperties = {
   background: "#fcfcfc"
 };
 
-export function Settings() {
+type SettingsProps = {
+  onRequestLogout?: () => void;
+  logoutBusy?: boolean;
+  onRequestHelp?: () => void;
+  helpBusy?: boolean;
+  onRequestClose?: () => void;
+};
+
+export function Settings({
+  onRequestLogout,
+  logoutBusy = false,
+  onRequestHelp,
+  helpBusy = false,
+  onRequestClose
+}: SettingsProps) {
   const {
     auth,
     setError,
@@ -136,9 +150,38 @@ export function Settings() {
   }, [remember, storageMode, encryptPassword]);
 
   return (
-    <div style={{ display: "grid", gap: 14, maxWidth: 920 }}>
+    <div style={{ display: "grid", gap: 14, width: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <b style={{ fontSize: 20 }}>Настройки</b>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {onRequestHelp ? (
+            <button
+              onClick={() => onRequestHelp()}
+              disabled={helpBusy}
+              style={{ ...buttonStyle, opacity: helpBusy ? 0.7 : 1, cursor: helpBusy ? "wait" : "pointer" }}
+            >
+              {helpBusy ? "Загружаю..." : "Справка"}
+            </button>
+          ) : null}
+          {onRequestClose ? (
+            <button
+              onClick={() => onRequestClose()}
+              disabled={logoutBusy}
+              style={{ ...buttonStyle, opacity: logoutBusy ? 0.7 : 1, cursor: logoutBusy ? "wait" : "pointer" }}
+            >
+              Закрыть
+            </button>
+          ) : null}
+          {auth === "ready" ? (
+            <button
+              onClick={() => onRequestLogout?.()}
+              disabled={logoutBusy}
+              style={{ ...buttonStyle, opacity: logoutBusy ? 0.7 : 1, cursor: logoutBusy ? "wait" : "pointer" }}
+            >
+              {logoutBusy ? "Выхожу..." : "Выйти из аккаунта"}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {status ? (
