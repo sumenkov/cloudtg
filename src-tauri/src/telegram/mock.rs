@@ -39,8 +39,11 @@ impl MockTelegram {
 #[async_trait::async_trait]
 impl TelegramService for MockTelegram {
   async fn auth_start(&self, _phone: String) -> Result<(), TgError> { *self.authed.lock() = true; Ok(()) }
+  async fn auth_resend_code(&self) -> Result<(), TgError> { Ok(()) }
+  async fn auth_code_resend_timeout(&self) -> Result<Option<i32>, TgError> { Ok(Some(60)) }
   async fn auth_submit_code(&self, _code: String) -> Result<(), TgError> { *self.authed.lock() = true; Ok(()) }
   async fn auth_submit_password(&self, _password: String) -> Result<(), TgError> { *self.authed.lock() = true; Ok(()) }
+  async fn auth_logout(&self) -> Result<(), TgError> { *self.authed.lock() = false; Ok(()) }
   async fn configure(&self, _api_id: i32, _api_hash: String, _tdlib_path: Option<String>) -> Result<(), TgError> { Ok(()) }
 
   async fn storage_check_channel(&self, _chat_id: ChatId) -> Result<bool, TgError> {

@@ -61,6 +61,7 @@ export function Settings() {
   const [encryptPassword, setEncryptPassword] = useState("");
   const [unlockPassword, setUnlockPassword] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -71,6 +72,12 @@ export function Settings() {
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [openBackupBusy, setOpenBackupBusy] = useState(false);
   const [backupStatus, setBackupStatus] = useState<string | null>(null);
+  const [channelStatus, setChannelStatus] = useState<string | null>(null);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
+  const [tdlibCacheMb, setTdlibCacheMb] = useState<number | null>(null);
+  const [tdlibCacheStatus, setTdlibCacheStatus] = useState<string | null>(null);
+  const [tdlibCacheRefreshing, setTdlibCacheRefreshing] = useState(false);
+  const [tdlibCacheClearing, setTdlibCacheClearing] = useState(false);
 
   const buildState = tdlibBuild.state;
   const isBuilding =
@@ -82,18 +89,6 @@ export function Settings() {
   const isError = buildState === "error";
   const isSuccess = buildState === "success";
   const showGperfHint = tdlibBuild.detail?.toLowerCase().includes("gperf");
-
-  useEffect(() => {
-    (async () => {
-      try {
-        await refreshSettings();
-        const s = useAppStore.getState().tgSettings;
-        if (s.tdlib_path) setTdlibPath(s.tdlib_path);
-      } catch (e: any) {
-        setError(String(e));
-      }
-    })();
-  }, [refreshSettings, setError]);
 
   const sourceLabel =
     creds.source === "keychain"
@@ -109,6 +104,36 @@ export function Settings() {
   const stepKeysConfigured = creds.available || creds.locked;
   const stepTdlibReady = isSuccess || (!isBuilding && !isError);
   const stepAuthReady = auth === "ready";
+  const keychainFallbackWarning =
+    "Системное хранилище недоступно. Укажи пароль шифрования или выбери режим «Зашифрованный файл».";
+
+  async function refreshTdlibCacheSize() {
+    const cache = await invokeSafe<{ bytes: number; megabytes: number }>("tdlib_cache_size");
+    setTdlibCacheMb(cache.megabytes);
+  }
+
+  useEffect(() => {
+    (async () => {
+      try {
+        await refreshSettings();
+        const s = useAppStore.getState().tgSettings;
+        if (s.tdlib_path) setTdlibPath(s.tdlib_path);
+      } catch (e: any) {
+        setError(String(e));
+      }
+      try {
+        await refreshTdlibCacheSize();
+      } catch {
+        setTdlibCacheStatus("Не удалось получить размер кеша TDLib.");
+      }
+    })();
+  }, [refreshSettings, setError]);
+
+  useEffect(() => {
+    if (!remember || storageMode !== "keychain" || Boolean(encryptPassword.trim())) {
+      setSaveWarning((prev) => (prev === keychainFallbackWarning ? null : prev));
+    }
+  }, [remember, storageMode, encryptPassword]);
 
   return (
     <div style={{ display: "grid", gap: 14, maxWidth: 920 }}>
@@ -229,12 +254,6 @@ export function Settings() {
               <div style={mutedTextStyle}>Ключи будут использоваться только в текущем запуске.</div>
             )}
 
-            {!creds.keychain_available && remember && storageMode === "keychain" ? (
-              <div style={{ marginTop: 8, fontSize: 12, color: "#b04a00" }}>
-                Системное хранилище недоступно. Выбери режим «Зашифрованный файл» и задай пароль.
-              </div>
-            ) : null}
-
             {creds.available ? (
               <div style={mutedTextStyle}>Ключи доступны. Источник: {sourceLabel}.</div>
             ) : creds.locked ? (
@@ -260,6 +279,7 @@ export function Settings() {
                 <button
                   onClick={async () => {
                     try {
+                      setUnlocking(true);
                       setStatus("Разблокирую ключи...");
                       await invokeSafe("settings_unlock_tg", { password: unlockPassword });
                       setUnlockPassword("");
@@ -270,11 +290,14 @@ export function Settings() {
                     } catch (e: any) {
                       setStatus("Не удалось разблокировать ключи");
                       setError(String(e));
+                    } finally {
+                      setUnlocking(false);
                     }
                   }}
-                  style={buttonStyle}
+                  disabled={unlocking}
+                  style={{ ...buttonStyle, opacity: unlocking ? 0.7 : 1, cursor: unlocking ? "wait" : "pointer" }}
                 >
-                  Разблокировать
+                  {unlocking ? "Разблокирую..." : "Разблокировать"}
                 </button>
               </div>
             </div>
@@ -316,10 +339,26 @@ export function Settings() {
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {saveWarning ? (
+              <div
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #f1a3a3",
+                  background: "#ffecec",
+                  fontSize: 12,
+                  color: "#9d1f1f"
+                }}
+              >
+                {saveWarning}
+              </div>
+            ) : null}
             <button
               onClick={async () => {
                 try {
                   setSaving(true);
+                  setSaveWarning(null);
                   setStatus("Сохраняю...");
                   setError(null);
                   const apiIdValue = apiId.trim();
@@ -337,11 +376,6 @@ export function Settings() {
                   if (remember && storageMode === "encrypted" && !encryptPassword.trim()) {
                     throw new Error("Нужен пароль для шифрования");
                   }
-                  if (remember && storageMode === "keychain" && !creds.keychain_available && !encryptPassword.trim()) {
-                    throw new Error(
-                      "Системное хранилище недоступно. Укажи пароль для шифрования или выбери режим «Зашифрованный файл»."
-                    );
-                  }
                   const res = await invokeSafe<{ storage?: string | null; message: string }>("settings_set_tg", {
                     input: {
                       apiId: apiIdNum,
@@ -355,20 +389,27 @@ export function Settings() {
                   await refreshSettings();
                   await refreshAuth();
                   setStatus(res.message || "Настройки сохранены.");
+                  setSaveWarning(null);
                   setApiId("");
                   setApiHash("");
                   setEncryptPassword("");
                 } catch (e: any) {
-                  setStatus("Не удалось сохранить настройки");
-                  setError(String(e));
+                  const message = String(e);
+                  if (message.includes("Системное хранилище недоступно")) {
+                    setSaveWarning(keychainFallbackWarning);
+                    setStatus(null);
+                  } else {
+                    setStatus("Не удалось сохранить настройки");
+                  }
+                  setError(message);
                 } finally {
                   setSaving(false);
                 }
               }}
               disabled={saving}
-              style={buttonStyle}
+              style={{ ...buttonStyle, opacity: saving ? 0.7 : 1, cursor: saving ? "wait" : "pointer" }}
             >
-              Сохранить подключение
+              {saving ? "Сохраняю..." : "Сохранить подключение"}
             </button>
 
             <button
@@ -386,9 +427,9 @@ export function Settings() {
                 }
               }}
               disabled={testing}
-              style={{ ...buttonStyle, opacity: testing ? 0.6 : 1 }}
+              style={{ ...buttonStyle, opacity: testing ? 0.7 : 1, cursor: testing ? "wait" : "pointer" }}
             >
-              Проверить связь с Telegram
+              {testing ? "Проверяю..." : "Проверить связь с Telegram"}
             </button>
           </div>
         </div>
@@ -453,9 +494,9 @@ export function Settings() {
                   }
                 }}
                 disabled={integrityBusy}
-                style={buttonStyle}
+                style={{ ...buttonStyle, opacity: integrityBusy ? 0.7 : 1, cursor: integrityBusy ? "wait" : "pointer" }}
               >
-                Запустить проверку
+                {integrityBusy ? "Проверяю..." : "Запустить проверку"}
               </button>
             </div>
             {integrityStatus ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>{integrityStatus}</div> : null}
@@ -480,87 +521,162 @@ export function Settings() {
                   }
                 }}
                 disabled={backupBusy}
-                style={buttonStyle}
+                style={{ ...buttonStyle, opacity: backupBusy ? 0.7 : 1, cursor: backupBusy ? "wait" : "pointer" }}
               >
-                Создать бэкап
+                {backupBusy ? "Создаю..." : "Создать бэкап"}
               </button>
+              <button
+                onClick={async () => {
+                  if (!window.confirm("Восстановить базу из последнего бэкапа? Потребуется перезапуск приложения.")) {
+                    return;
+                  }
+                  try {
+                    setRestoreBusy(true);
+                    setBackupStatus("Подготавливаю восстановление...");
+                    const res = await invokeSafe<{ message: string }>("backup_restore");
+                    setBackupStatus(res.message || "Восстановление подготовлено. Перезапусти приложение.");
+                  } catch (e: any) {
+                    setBackupStatus("Не удалось подготовить восстановление");
+                    setError(String(e));
+                  } finally {
+                    setRestoreBusy(false);
+                  }
+                }}
+                disabled={restoreBusy}
+                style={{
+                  ...buttonStyle,
+                  background: "#fef5e6",
+                  border: "1px solid #f2c185",
+                  opacity: restoreBusy ? 0.7 : 1,
+                  cursor: restoreBusy ? "wait" : "pointer"
+                }}
+              >
+                {restoreBusy ? "Подготавливаю..." : "Восстановить базу из бэкапа"}
+              </button>
+            </div>
+            {backupStatus ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>{backupStatus}</div> : null}
+          </div>
+
+          <div style={groupStyle}>
+            <b style={{ fontSize: 14 }}>Каналы хранения</b>
+            <div style={mutedTextStyle}>Открыть канал бэкапов и создать новый основной канал CloudTG.</div>
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <button
                 onClick={async () => {
                   try {
                     setOpenBackupBusy(true);
-                    setBackupStatus("Открываю канал бэкапов...");
+                    setChannelStatus("Открываю канал бэкапов...");
                     const res = await invokeSafe<{ message: string }>("backup_open_channel");
-                    setBackupStatus(res.message || "Канал открыт.");
+                    setChannelStatus(res.message || "Канал открыт.");
                   } catch (e: any) {
-                    setBackupStatus("Не удалось открыть канал");
+                    setChannelStatus("Не удалось открыть канал");
                     setError(String(e));
                   } finally {
                     setOpenBackupBusy(false);
                   }
                 }}
                 disabled={openBackupBusy}
-                style={buttonStyle}
+                style={{ ...buttonStyle, opacity: openBackupBusy ? 0.7 : 1, cursor: openBackupBusy ? "wait" : "pointer" }}
               >
-                Открыть канал бэкапов
+                {openBackupBusy ? "Открываю..." : "Открыть канал бэкапов"}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!window.confirm("Создать новый канал и перенести туда данные из базы?")) {
+                    return;
+                  }
+                  try {
+                    setCreating(true);
+                    setChannelStatus("Создаю новый канал и переношу данные...");
+                    await invokeSafe("tg_create_channel");
+                    setChannelStatus("Канал создан. Данные перенесены. Проверь новый канал CloudTG.");
+                  } catch (e: any) {
+                    setChannelStatus("Не удалось создать новый канал");
+                    setError(String(e));
+                  } finally {
+                    setCreating(false);
+                  }
+                }}
+                disabled={creating}
+                style={{
+                  ...buttonStyle,
+                  background: "#fee",
+                  border: "1px solid #f99",
+                  opacity: creating ? 0.7 : 1,
+                  cursor: creating ? "wait" : "pointer"
+                }}
+              >
+                {creating ? "Создаю..." : "Создать новый канал CloudTG"}
               </button>
             </div>
-            {backupStatus ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>{backupStatus}</div> : null}
+            {channelStatus ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>{channelStatus}</div> : null}
           </div>
-        </div>
-      </div>
 
-      <div style={{ ...panelStyle, border: "1px solid #f3bcbc", background: "#fff4f4" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <b style={{ color: "#9d1f1f" }}>Опасные действия</b>
-          <Hint text="Эти операции могут изменить структуру хранения или потребовать перезапуск приложения." />
-        </div>
-        <div style={mutedTextStyle}>Используй только если понимаешь последствия.</div>
-        <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <button
-            onClick={async () => {
-              if (!window.confirm("Восстановить базу из последнего бэкапа? Потребуется перезапуск приложения.")) {
-                return;
-              }
-              try {
-                setRestoreBusy(true);
-                setBackupStatus("Подготавливаю восстановление...");
-                const res = await invokeSafe<{ message: string }>("backup_restore");
-                setBackupStatus(res.message || "Восстановление подготовлено. Перезапусти приложение.");
-              } catch (e: any) {
-                setBackupStatus("Не удалось подготовить восстановление");
-                setError(String(e));
-              } finally {
-                setRestoreBusy(false);
-              }
-            }}
-            disabled={restoreBusy}
-            style={{ ...buttonStyle, background: "#fef5e6", border: "1px solid #f2c185" }}
-          >
-            Восстановить базу из бэкапа
-          </button>
-
-          <button
-            onClick={async () => {
-              if (!window.confirm("Создать новый канал и перенести туда данные из базы?")) {
-                return;
-              }
-              try {
-                setCreating(true);
-                setStatus("Создаю новый канал и переношу данные...");
-                await invokeSafe("tg_create_channel");
-                setStatus("Канал создан. Данные перенесены. Проверь новый канал CloudTG.");
-              } catch (e: any) {
-                setStatus("Не удалось создать новый канал");
-                setError(String(e));
-              } finally {
-                setCreating(false);
-              }
-            }}
-            disabled={creating}
-            style={{ ...buttonStyle, background: "#fee", border: "1px solid #f99" }}
-          >
-            Создать новый канал CloudTG
-          </button>
+          <div style={groupStyle}>
+            <b style={{ fontSize: 14 }}>Кеш TDLib</b>
+            <div style={mutedTextStyle}>
+              Оценка объема кеша: <b>{tdlibCacheMb === null ? "—" : `${tdlibCacheMb.toFixed(1)} МБ`}</b>
+            </div>
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                onClick={async () => {
+                  try {
+                    setTdlibCacheRefreshing(true);
+                    setTdlibCacheStatus("Обновляю оценку кеша TDLib...");
+                    await refreshTdlibCacheSize();
+                    setTdlibCacheStatus("Оценка кеша TDLib обновлена.");
+                  } catch (e: any) {
+                    setTdlibCacheStatus("Не удалось обновить оценку кеша TDLib");
+                    setError(String(e));
+                  } finally {
+                    setTdlibCacheRefreshing(false);
+                  }
+                }}
+                disabled={tdlibCacheRefreshing || tdlibCacheClearing}
+                style={{
+                  ...buttonStyle,
+                  opacity: tdlibCacheRefreshing || tdlibCacheClearing ? 0.7 : 1,
+                  cursor: tdlibCacheRefreshing || tdlibCacheClearing ? "wait" : "pointer"
+                }}
+              >
+                {tdlibCacheRefreshing ? "Обновляю..." : "Обновить оценку"}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!window.confirm("Очистить кеш TDLib? Локальные файлы в папке downloads не будут удалены.")) {
+                    return;
+                  }
+                  try {
+                    setTdlibCacheClearing(true);
+                    setTdlibCacheStatus("Очищаю кеш TDLib...");
+                    const res = await invokeSafe<{
+                      message: string;
+                      before_bytes: number;
+                      after_bytes: number;
+                      freed_bytes: number;
+                      failures: number;
+                    }>("tdlib_cache_clear");
+                    setTdlibCacheMb(res.after_bytes / (1024 * 1024));
+                    setTdlibCacheStatus(res.message || "Кеш TDLib очищен.");
+                  } catch (e: any) {
+                    setTdlibCacheStatus("Не удалось очистить кеш TDLib");
+                    setError(String(e));
+                  } finally {
+                    setTdlibCacheClearing(false);
+                  }
+                }}
+                disabled={tdlibCacheRefreshing || tdlibCacheClearing}
+                style={{
+                  ...buttonStyle,
+                  opacity: tdlibCacheRefreshing || tdlibCacheClearing ? 0.7 : 1,
+                  cursor: tdlibCacheRefreshing || tdlibCacheClearing ? "wait" : "pointer"
+                }}
+              >
+                {tdlibCacheClearing ? "Очищаю..." : "Очистить кеш TDLib"}
+              </button>
+            </div>
+            {tdlibCacheStatus ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>{tdlibCacheStatus}</div> : null}
+          </div>
         </div>
       </div>
 

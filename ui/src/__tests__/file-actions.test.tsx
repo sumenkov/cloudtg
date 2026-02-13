@@ -130,6 +130,7 @@ describe("FileList", () => {
           makeFile({ id: "b", name: "local.bin", is_downloaded: true, local_size: 1024 })
         ]}
         selectedFiles={new Set<string>()}
+        downloadingFileIds={new Set<string>()}
         onToggleSelect={() => {}}
         onDownload={() => {}}
         onOpen={() => {}}
@@ -154,6 +155,7 @@ describe("FileList", () => {
           makeFile({ id: "b", name: "after.txt", is_downloaded: true, local_size: 2048 })
         ]}
         selectedFiles={new Set<string>()}
+        downloadingFileIds={new Set<string>()}
         onToggleSelect={() => {}}
         onDownload={() => {}}
         onOpen={() => {}}

@@ -73,7 +73,7 @@ describe("appLifecycle", () => {
     expect(refreshTree).not.toHaveBeenCalled();
   });
 
-  it("auth_state_changed handler refreshes tree and starts sync once", async () => {
+  it("auth_state_changed handler restarts sync after leaving ready state", async () => {
     const disposedRef = { current: false };
     const syncStartedRef = { current: false };
     const setAuth = vi.fn();
@@ -92,13 +92,15 @@ describe("appLifecycle", () => {
     await handler({ payload: { state: "ready" } });
     await handler({ payload: { state: "ready" } });
     await handler({ payload: { state: "wait_code" } });
+    await handler({ payload: { state: "ready" } });
 
-    expect(setAuth).toHaveBeenCalledTimes(3);
+    expect(setAuth).toHaveBeenCalledTimes(4);
     expect(setAuth).toHaveBeenNthCalledWith(1, "ready");
     expect(setAuth).toHaveBeenNthCalledWith(2, "ready");
     expect(setAuth).toHaveBeenNthCalledWith(3, "wait_code");
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(refreshTree).toHaveBeenCalledTimes(3);
+    expect(setAuth).toHaveBeenNthCalledWith(4, "ready");
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(refreshTree).toHaveBeenCalledTimes(5);
     expect(setError).not.toHaveBeenCalled();
   });
 

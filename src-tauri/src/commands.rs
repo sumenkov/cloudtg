@@ -89,6 +89,21 @@ pub struct RepairResult {
   pub code: Option<String>
 }
 
+#[derive(serde::Serialize)]
+pub struct TdlibCacheInfo {
+  pub bytes: u64,
+  pub megabytes: f64
+}
+
+#[derive(serde::Serialize)]
+pub struct TdlibCacheClearResult {
+  pub message: String,
+  pub before_bytes: u64,
+  pub after_bytes: u64,
+  pub freed_bytes: u64,
+  pub failures: u64
+}
+
 const RECONCILE_SYNC_REQUIRED: &str = "RECONCILE_SYNC_REQUIRED";
 const REPAIR_NEED_FILE: &str = "REPAIR_NEED_FILE";
 
@@ -189,6 +204,98 @@ fn github_api_agent() -> Agent {
     .timeout_recv_body(Some(std::time::Duration::from_secs(20)))
     .build()
     .into()
+}
+
+fn tdlib_cache_root(paths: &Paths) -> PathBuf {
+  paths.cache_dir.join("tdlib_files")
+}
+
+fn dir_size_bytes(root: &Path) -> anyhow::Result<u64> {
+  if !root.exists() {
+    return Ok(0);
+  }
+  let mut total = 0_u64;
+  let mut stack = vec![root.to_path_buf()];
+  while let Some(dir) = stack.pop() {
+    let entries = match std::fs::read_dir(&dir) {
+      Ok(v) => v,
+      Err(e) => {
+        tracing::warn!(event = "tdlib_cache_read_dir_failed", path = %dir.display(), error = %e, "Не удалось прочитать директорию кеша TDLib");
+        continue;
+      }
+    };
+    for entry in entries {
+      let entry = match entry {
+        Ok(v) => v,
+        Err(e) => {
+          tracing::warn!(event = "tdlib_cache_entry_failed", path = %dir.display(), error = %e, "Не удалось прочитать запись директории кеша TDLib");
+          continue;
+        }
+      };
+      let path = entry.path();
+      let meta = match std::fs::symlink_metadata(&path) {
+        Ok(v) => v,
+        Err(e) => {
+          tracing::warn!(event = "tdlib_cache_metadata_failed", path = %path.display(), error = %e, "Не удалось получить метаданные записи кеша TDLib");
+          continue;
+        }
+      };
+      if meta.is_dir() {
+        stack.push(path);
+      } else if meta.is_file() {
+        total = total.saturating_add(meta.len());
+      }
+    }
+  }
+  Ok(total)
+}
+
+fn clear_dir_contents(root: &Path) -> u64 {
+  if !root.exists() {
+    return 0;
+  }
+  let mut failures = 0_u64;
+  let mut stack = vec![root.to_path_buf()];
+
+  while let Some(dir) = stack.pop() {
+    let entries = match std::fs::read_dir(&dir) {
+      Ok(v) => v,
+      Err(e) => {
+        failures += 1;
+        tracing::warn!(event = "tdlib_cache_clear_read_dir_failed", path = %dir.display(), error = %e, "Не удалось прочитать директорию кеша TDLib");
+        continue;
+      }
+    };
+    for entry in entries {
+      let entry = match entry {
+        Ok(v) => v,
+        Err(e) => {
+          failures += 1;
+          tracing::warn!(event = "tdlib_cache_clear_entry_failed", path = %dir.display(), error = %e, "Не удалось прочитать запись кеша TDLib");
+          continue;
+        }
+      };
+      let path = entry.path();
+      let meta = match std::fs::symlink_metadata(&path) {
+        Ok(v) => v,
+        Err(e) => {
+          failures += 1;
+          tracing::warn!(event = "tdlib_cache_clear_metadata_failed", path = %path.display(), error = %e, "Не удалось получить метаданные записи кеша TDLib");
+          continue;
+        }
+      };
+      if meta.is_dir() {
+        stack.push(path);
+        continue;
+      }
+      if let Err(e) = std::fs::remove_file(&path) {
+        failures += 1;
+        tracing::warn!(event = "tdlib_cache_clear_remove_failed", path = %path.display(), error = %e, "Не удалось удалить файл кеша TDLib");
+      }
+    }
+  }
+
+  failures
 }
 
 fn normalize_upload_candidate_paths(paths: Vec<String>) -> Vec<PathBuf> {
@@ -498,6 +605,20 @@ pub async fn auth_start(state: State<'_, AppState>, phone: String) -> Result<(),
 }
 
 #[tauri::command]
+pub async fn auth_resend_code(state: State<'_, AppState>) -> Result<(), String> {
+  info!(event = "auth_resend_code", "Повторная отправка кода авторизации");
+  let tg = state.telegram().map_err(map_err)?;
+  tg.auth_resend_code().await.map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn auth_code_resend_timeout(state: State<'_, AppState>) -> Result<Option<i32>, String> {
+  let tg = state.telegram().map_err(map_err)?;
+  tg.auth_code_resend_timeout().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn auth_submit_code(state: State<'_, AppState>, code: String) -> Result<(), String> {
   info!(event = "auth_submit_code", code_len = code.len(), "Отправка кода авторизации");
   let tg = state.telegram().map_err(map_err)?;
@@ -510,6 +631,15 @@ pub async fn auth_submit_password(state: State<'_, AppState>, password: String) 
   info!(event = "auth_submit_password", password_len = password.len(), "Отправка пароля 2FA");
   let tg = state.telegram().map_err(map_err)?;
   tg.auth_submit_password(password).await.map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn auth_logout(state: State<'_, AppState>) -> Result<(), String> {
+  info!(event = "auth_logout", "Выход из Telegram");
+  let tg = state.telegram().map_err(map_err)?;
+  tg.auth_logout().await.map_err(|e| e.to_string())?;
+  state.set_auth_state(AuthState::Unknown);
   Ok(())
 }
 
@@ -658,6 +788,51 @@ pub async fn tdlib_pick() -> Result<Option<String>, String> {
   // On Linux, TDLib is often `libtdjson.so.1`, and filtering by extension can hide it.
   let file = dialog.pick_file();
   Ok(file.map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub async fn tdlib_cache_size(state: State<'_, AppState>) -> Result<TdlibCacheInfo, String> {
+  let paths = state.paths().map_err(map_err)?;
+  let root = tdlib_cache_root(&paths);
+  let bytes = dir_size_bytes(&root).map_err(map_err)?;
+  Ok(TdlibCacheInfo {
+    bytes,
+    megabytes: (bytes as f64) / (1024_f64 * 1024_f64)
+  })
+}
+
+#[tauri::command]
+pub async fn tdlib_cache_clear(state: State<'_, AppState>) -> Result<TdlibCacheClearResult, String> {
+  let paths = state.paths().map_err(map_err)?;
+  let root = tdlib_cache_root(&paths);
+  tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<TdlibCacheClearResult> {
+    let before_bytes = dir_size_bytes(&root)?;
+    let failures = clear_dir_contents(&root);
+    let after_bytes = dir_size_bytes(&root)?;
+    let freed_bytes = before_bytes.saturating_sub(after_bytes);
+    let message = if failures == 0 {
+      format!(
+        "Кеш TDLib очищен. Освобождено {:.1} МБ.",
+        (freed_bytes as f64) / (1024_f64 * 1024_f64)
+      )
+    } else {
+      format!(
+        "Кеш TDLib очищен частично. Освобождено {:.1} МБ, ошибок удаления: {}.",
+        (freed_bytes as f64) / (1024_f64 * 1024_f64),
+        failures
+      )
+    };
+    Ok(TdlibCacheClearResult {
+      message,
+      before_bytes,
+      after_bytes,
+      freed_bytes,
+      failures
+    })
+  })
+    .await
+    .map_err(|e| format!("Не удалось очистить кеш TDLib: {e}"))?
+    .map_err(map_err)
 }
 
 #[tauri::command]
@@ -1332,7 +1507,9 @@ pub async fn settings_set_tg(state: State<'_, AppState>, input: TgSettingsInput)
   if let Some(creds) = configured_creds {
     let tg = state.telegram().map_err(map_err)?;
     tg.configure(creds.api_id, creds.api_hash, input.tdlib_path).await.map_err(|e| e.to_string())?;
-    state.set_auth_state(AuthState::Unknown);
+    if !matches!(state.auth_state(), AuthState::Ready) {
+      state.set_auth_state(AuthState::Unknown);
+    }
   } else {
     state.set_auth_state(AuthState::WaitConfig);
   }
@@ -1364,7 +1541,9 @@ pub async fn settings_unlock_tg(state: State<'_, AppState>, password: String) ->
   let tdlib_path = settings::get_tdlib_path(db.pool()).await.map_err(map_err)?;
   let tg = state.telegram().map_err(map_err)?;
   tg.configure(creds.api_id, creds.api_hash, tdlib_path).await.map_err(|e| e.to_string())?;
-  state.set_auth_state(AuthState::Unknown);
+  if !matches!(state.auth_state(), AuthState::Ready) {
+    state.set_auth_state(AuthState::Unknown);
+  }
   Ok(())
 }
 
@@ -1667,11 +1846,23 @@ mod tests {
       Err(TgError::NotImplemented)
     }
 
+    async fn auth_resend_code(&self) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn auth_code_resend_timeout(&self) -> Result<Option<i32>, TgError> {
+      Ok(None)
+    }
+
     async fn auth_submit_code(&self, _code: String) -> Result<(), TgError> {
       Err(TgError::NotImplemented)
     }
 
     async fn auth_submit_password(&self, _password: String) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn auth_logout(&self) -> Result<(), TgError> {
       Err(TgError::NotImplemented)
     }
 
@@ -1909,6 +2100,27 @@ mod tests {
     assert!(!is_strict_https_url("http://example.com/release"));
     assert!(!is_strict_https_url("https://"));
     assert!(!is_strict_https_url("file:///tmp/x"));
+  }
+
+  #[test]
+  fn clear_dir_contents_removes_files_and_keeps_directories() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let root = tmp.path().join("tdlib_files");
+    let session = root.join("cloudtg-dev");
+    let nested = session.join("temp").join("chunks");
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(session.join("session.bin"), b"session")?;
+    std::fs::write(nested.join("piece.bin"), b"piece")?;
+
+    let failures = clear_dir_contents(&root);
+
+    assert_eq!(failures, 0);
+    assert!(root.is_dir());
+    assert!(session.is_dir());
+    assert!(session.join("temp").is_dir());
+    assert!(nested.is_dir());
+    assert_eq!(dir_size_bytes(&root)?, 0);
+    Ok(())
   }
 
   #[test]

@@ -40,6 +40,7 @@ export default function App() {
     setTgSync
   } = useAppStore();
   const [showSettings, setShowSettings] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const syncStartedRef = useRef(false);
@@ -51,6 +52,24 @@ export default function App() {
     if (!error) return;
     setError(null);
   }, [error, setError]);
+  const handleLogout = useCallback(async () => {
+    if (!window.confirm("Выйти из Telegram в CloudTG?")) {
+      return;
+    }
+    try {
+      setLogoutBusy(true);
+      setError(null);
+      await invokeSafe("auth_logout");
+      setShowSettings(false);
+      setTgSync({ state: null, message: null, processed: 0, total: null });
+      await refreshAuth();
+      await refreshSettings();
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setLogoutBusy(false);
+    }
+  }, [refreshAuth, refreshSettings, setError, setTgSync]);
 
   useEffect(() => {
     const disposedRef = { current: false };
@@ -184,18 +203,35 @@ export default function App() {
           <h1 style={{ marginBottom: 4 }}>CloudTG</h1>
           {appVersion ? <div style={{ fontSize: 12, opacity: 0.65 }}>v{appVersion}</div> : null}
         </div>
-        <button
-          onClick={() => {
-            if (showSettings) {
-              setShowSettings(false);
-              return;
-            }
-            setShowSettings(true);
-          }}
-          style={{ padding: "8px 12px", borderRadius: 10 }}
-        >
-          {showSettings ? "Закрыть" : "Настройки"}
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {auth === "ready" ? (
+            <button
+              onClick={handleLogout}
+              disabled={logoutBusy}
+              style={{ padding: "8px 12px", borderRadius: 10, opacity: logoutBusy ? 0.7 : 1, cursor: logoutBusy ? "wait" : "pointer" }}
+            >
+              {logoutBusy ? "Выхожу..." : "Выйти"}
+            </button>
+          ) : null}
+          <button
+            onClick={async () => {
+              if (showSettings) {
+                try {
+                  await refreshAuth();
+                } catch (e: any) {
+                  setError(String(e));
+                }
+                setShowSettings(false);
+                return;
+              }
+              setShowSettings(true);
+            }}
+            disabled={logoutBusy}
+            style={{ padding: "8px 12px", borderRadius: 10 }}
+          >
+            {showSettings ? "Закрыть" : "Настройки"}
+          </button>
+        </div>
       </div>
       <p style={{ marginTop: 0, opacity: 0.8 }}>
         Добро пожаловать в CloudTG. Здесь можно хранить, искать и открывать файлы из Telegram как в обычном файловом менеджере.

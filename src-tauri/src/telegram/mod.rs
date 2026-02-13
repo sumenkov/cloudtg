@@ -52,8 +52,11 @@ pub enum TgError {
 #[async_trait::async_trait]
 pub trait TelegramService: Send + Sync {
   async fn auth_start(&self, phone: String) -> Result<(), TgError>;
+  async fn auth_resend_code(&self) -> Result<(), TgError>;
+  async fn auth_code_resend_timeout(&self) -> Result<Option<i32>, TgError>;
   async fn auth_submit_code(&self, code: String) -> Result<(), TgError>;
   async fn auth_submit_password(&self, password: String) -> Result<(), TgError>;
+  async fn auth_logout(&self) -> Result<(), TgError>;
   async fn configure(&self, api_id: i32, api_hash: String, tdlib_path: Option<String>) -> Result<(), TgError>;
 
   async fn storage_check_channel(&self, chat_id: ChatId) -> Result<bool, TgError>;

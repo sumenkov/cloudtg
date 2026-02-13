@@ -91,6 +91,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   const [searchActive, setSearchActive] = useState(false);
   const [searchBusy, setSearchBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [downloadingFiles, setDownloadingFiles] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<MainTab>("files");
   const selectedNodeRef = useRef<DirNode | null>(null);
   const isRootSelectedRef = useRef<boolean>(false);
@@ -360,13 +361,25 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
   };
 
   const onFileDownload = async (file: FileItem) => {
-    await handleDownloadAction({
-      file,
-      confirm: (message) => window.confirm(message),
-      downloadFile,
-      reloadFiles
-    });
+    setDownloadingFiles((prev) => ({ ...prev, [file.id]: file.name }));
+    try {
+      await handleDownloadAction({
+        file,
+        confirm: (message) => window.confirm(message),
+        downloadFile,
+        reloadFiles
+      });
+    } finally {
+      setDownloadingFiles((prev) => {
+        const next = { ...prev };
+        delete next[file.id];
+        return next;
+      });
+    }
   };
+
+  const downloadingNames = useMemo(() => Object.values(downloadingFiles), [downloadingFiles]);
+  const downloadingFileIds = useMemo(() => new Set(Object.keys(downloadingFiles)), [downloadingFiles]);
 
   const onFileOpen = async (file: FileItem) => {
     await handleOpenAction({
@@ -413,6 +426,7 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
     <FileList
       files={files}
       selectedFiles={selectedFiles}
+      downloadingFileIds={downloadingFileIds}
       onToggleSelect={onFileToggleSelect}
       onDownload={async (file) => {
         try {
@@ -702,6 +716,23 @@ export function FileManager({ tree }: { tree: DirNode | null }) {
                     <button onClick={() => void resetSearch()} style={{ padding: "6px 10px", borderRadius: 8 }}>
                       Сбросить поиск
                     </button>
+                  </div>
+                ) : null}
+
+                {downloadingNames.length > 0 ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: 10,
+                      borderRadius: 8,
+                      border: "1px solid #d8e7ff",
+                      background: "#f4f8ff",
+                      fontSize: 12
+                    }}
+                  >
+                    {downloadingNames.length === 1
+                      ? `Скачивание: ${downloadingNames[0]}`
+                      : `Скачивание файлов: ${downloadingNames.slice(0, 3).join(", ")}${downloadingNames.length > 3 ? ` и еще ${downloadingNames.length - 3}` : ""}`}
                   </div>
                 ) : null}
 

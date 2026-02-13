@@ -1038,11 +1038,23 @@ mod tests {
       Err(TgError::NotImplemented)
     }
 
+    async fn auth_resend_code(&self) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn auth_code_resend_timeout(&self) -> Result<Option<i32>, TgError> {
+      Ok(None)
+    }
+
     async fn auth_submit_code(&self, _code: String) -> Result<(), TgError> {
       Err(TgError::NotImplemented)
     }
 
     async fn auth_submit_password(&self, _password: String) -> Result<(), TgError> {
+      Err(TgError::NotImplemented)
+    }
+
+    async fn auth_logout(&self) -> Result<(), TgError> {
       Err(TgError::NotImplemented)
     }
 

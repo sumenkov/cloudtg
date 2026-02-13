@@ -16,6 +16,7 @@ dist
 /data
 /cache
 /logs
+/third_party/tdlib/prebuilt
 
 # OS
 .DS_Store

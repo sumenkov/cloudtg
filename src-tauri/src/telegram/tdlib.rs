@@ -47,9 +47,8 @@ impl TdlibConfig {
     session_name: &str
   ) -> anyhow::Result<Self> {
     let db_dir = paths.data_dir.join("tdlib").join(session_name);
-    let files_dir = paths.cache_dir.join("tdlib_files").join(session_name);
+    let files_dir = ensure_tdlib_files_session_dirs(paths, session_name)?;
     std::fs::create_dir_all(&db_dir)?;
-    std::fs::create_dir_all(&files_dir)?;
     let db_encryption_key = crate::secrets::tdlib_db_encryption_key(paths)?;
 
     Ok(Self { api_id, api_hash, db_dir, files_dir, db_encryption_key })
@@ -228,6 +227,12 @@ fn normalize_session_name(raw: &str) -> String {
       }
     })
     .collect()
+}
+
+fn ensure_tdlib_files_session_dirs(paths: &Paths, session_name: &str) -> std::io::Result<PathBuf> {
+  let files_dir = paths.cache_dir.join("tdlib_files").join(session_name);
+  std::fs::create_dir_all(files_dir.join("temp"))?;
+  Ok(files_dir)
 }
 
 fn app_icon_bytes() -> &'static [u8] {
@@ -1141,6 +1146,30 @@ impl TelegramService for TdlibTelegram {
     Ok(())
   }
 
+  async fn auth_resend_code(&self) -> Result<(), TgError> {
+    let _ = self
+      .request(json!({"@type":"resendAuthenticationCode"}), Duration::from_secs(20))
+      .await?;
+    Ok(())
+  }
+
+  async fn auth_code_resend_timeout(&self) -> Result<Option<i32>, TgError> {
+    let state = self
+      .request(json!({"@type":"getAuthorizationState"}), Duration::from_secs(10))
+      .await?;
+    let state_type = state.get("@type").and_then(|v| v.as_str()).unwrap_or("");
+    if state_type != "authorizationStateWaitCode" {
+      return Ok(None);
+    }
+    let timeout = state
+      .get("code_info")
+      .and_then(|v| v.get("timeout"))
+      .and_then(|v| v.as_i64())
+      .filter(|v| *v > 0)
+      .and_then(|v| i32::try_from(v).ok());
+    Ok(timeout)
+  }
+
   async fn auth_submit_code(&self, code: String) -> Result<(), TgError> {
     let payload = json!({"@type":"checkAuthenticationCode","code":code}).to_string();
     self.tx
@@ -1154,6 +1183,18 @@ impl TelegramService for TdlibTelegram {
     self.tx
       .send(TdlibCommand::Td(payload))
       .map_err(|_| TgError::Other("TDLib поток не запущен".into()))?;
+    Ok(())
+  }
+
+  async fn auth_logout(&self) -> Result<(), TgError> {
+    let state = self
+      .request(json!({"@type":"getAuthorizationState"}), Duration::from_secs(10))
+      .await?;
+    let state_type = state.get("@type").and_then(|v| v.as_str()).unwrap_or("");
+    if state_type == "authorizationStateClosed" || state_type == "authorizationStateClosing" {
+      return Ok(());
+    }
+    let _ = self.request(json!({"@type":"logOut"}), Duration::from_secs(20)).await?;
     Ok(())
   }
 
@@ -1853,6 +1894,8 @@ impl TelegramService for TdlibTelegram {
   async fn download_message_file(&self, chat_id: ChatId, message_id: MessageId, target: std::path::PathBuf)
     -> Result<std::path::PathBuf, TgError> {
     self.ensure_authorized().await?;
+    let session_name = tdlib_session_name();
+    ensure_tdlib_files_session_dirs(&self.paths, &session_name).map_err(TgError::Io)?;
     let msg = self
       .request(
         json!({
@@ -1903,6 +1946,14 @@ impl TelegramService for TdlibTelegram {
       std::fs::create_dir_all(parent).map_err(TgError::Io)?;
     }
     std::fs::copy(&src_path, &target).map_err(TgError::Io)?;
+    // Локальная копия уже сохранена в cache/downloads. Просим TDLib удалить внутренний кеш-файл,
+    // чтобы не накапливались дубли в cache/tdlib_files.
+    if let Err(e) = self
+      .request(json!({"@type":"deleteFile","file_id": file_id}), Duration::from_secs(5))
+      .await
+    {
+      tracing::debug!(event = "tdlib_delete_cache_file_failed", file_id = file_id, error = %e, "Не удалось очистить кеш TDLib после скачивания");
+    }
     Ok(target)
   }
 

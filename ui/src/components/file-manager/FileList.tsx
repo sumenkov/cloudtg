@@ -5,6 +5,7 @@ import { displayFileSizeBytes, shouldShowOpenFolderButton } from "./fileActions"
 type FileListProps = {
   files: FileItem[];
   selectedFiles: Set<string>;
+  downloadingFileIds: Set<string>;
   onToggleSelect: (id: string) => void;
   onDownload: (file: FileItem) => void | Promise<void>;
   onOpen: (file: FileItem) => void | Promise<void>;
@@ -17,6 +18,7 @@ type FileListProps = {
 export function FileList({
   files,
   selectedFiles,
+  downloadingFileIds,
   onToggleSelect,
   onDownload,
   onOpen,
@@ -33,9 +35,13 @@ export function FileList({
         <div>
           {files.map((file) => {
             const checked = selectedFiles.has(file.id);
+            const isDownloading = downloadingFileIds.has(file.id);
             const displaySize = displayFileSizeBytes(file);
-            const primaryLabel = file.is_downloaded ? "Открыть" : "Скачать";
+            const primaryLabel = isDownloading ? "Скачиваю..." : file.is_downloaded ? "Открыть" : "Скачать";
             const runPrimaryAction = () => {
+              if (isDownloading) {
+                return;
+              }
               if (file.is_downloaded) {
                 return onOpen(file);
               }
@@ -61,6 +67,20 @@ export function FileList({
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ fontWeight: 500 }}>{file.name}</span>
+                    {isDownloading ? (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          color: "#255bb5",
+                          border: "1px solid #b7d0ff",
+                          background: "#e8f1ff",
+                          borderRadius: 999,
+                          padding: "1px 6px"
+                        }}
+                      >
+                        загрузка...
+                      </span>
+                    ) : null}
                     {file.is_broken ? (
                       <span
                         style={{
@@ -84,11 +104,14 @@ export function FileList({
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
                   <button
                     onClick={() => void runPrimaryAction()}
+                    disabled={isDownloading}
                     style={{
                       padding: "6px 12px",
                       borderRadius: 8,
                       background: "#e8f1ff",
-                      border: "1px solid #b7d0ff"
+                      border: "1px solid #b7d0ff",
+                      opacity: isDownloading ? 0.7 : 1,
+                      cursor: isDownloading ? "wait" : "pointer"
                     }}
                   >
                     {primaryLabel}
@@ -123,6 +146,7 @@ export function FileList({
                       {!file.is_downloaded ? (
                         <button
                           onClick={() => void onOpen(file)}
+                          disabled={isDownloading}
                           style={{ padding: "6px 10px", borderRadius: 8, textAlign: "left" }}
                         >
                           Открыть (скачается)
@@ -130,9 +154,10 @@ export function FileList({
                       ) : (
                         <button
                           onClick={() => void onDownload(file)}
+                          disabled={isDownloading}
                           style={{ padding: "6px 10px", borderRadius: 8, textAlign: "left" }}
                         >
-                          Скачать заново
+                          {isDownloading ? "Идет скачивание..." : "Скачать заново"}
                         </button>
                       )}
                       {shouldShowOpenFolderButton(file) ? (

@@ -72,16 +72,18 @@ export function createAuthStateChangedHandler({
   return async (event) => {
     if (disposedRef.current) return;
     setAuth(event.payload.state);
-    if (event.payload.state === "ready") {
-      await refreshTree();
-      await runSyncOnce({
-        syncStartedRef,
-        invoke,
-        refreshTree,
-        setError,
-        disposedRef
-      });
+    if (event.payload.state !== "ready") {
+      syncStartedRef.current = false;
+      return;
     }
+    await refreshTree();
+    await runSyncOnce({
+      syncStartedRef,
+      invoke,
+      refreshTree,
+      setError,
+      disposedRef
+    });
   };
 }
 
