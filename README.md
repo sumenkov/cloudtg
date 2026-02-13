@@ -34,6 +34,27 @@ CloudTG — настольное приложение, которое превр
 - Node.js 18+
 - Rust stable (edition 2021)
 
+Системные зависимости по ОС (для сборки из исходников):
+
+Linux (Debian/Ubuntu):
+```bash
+sudo apt update
+sudo apt install -y pkg-config libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf git cmake gperf build-essential
+```
+
+macOS:
+```bash
+xcode-select --install
+brew install pkg-config git cmake gperf
+```
+
+Windows 10/11:
+- WebView2 Runtime (обычно уже установлен).
+- Visual Studio Build Tools с компонентом C++ и Windows SDK.
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools
+```
+
 Установка зависимостей:
 ```bash
 npm install
