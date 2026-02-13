@@ -45,6 +45,7 @@ fn main() {
       commands::auth_status,
       commands::app_check_update,
       commands::app_open_url,
+      commands::app_help_text,
       commands::auth_start,
       commands::auth_resend_code,
       commands::auth_code_resend_timeout,

@@ -106,6 +106,7 @@ pub struct TdlibCacheClearResult {
 
 const RECONCILE_SYNC_REQUIRED: &str = "RECONCILE_SYNC_REQUIRED";
 const REPAIR_NEED_FILE: &str = "REPAIR_NEED_FILE";
+const APP_HELP_TEXT: &str = include_str!("../../docs/HELP.md");
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -594,6 +595,11 @@ pub async fn app_open_url(url: String) -> Result<(), String> {
   }
   open_url_in_os(&url).map_err(map_err)?;
   Ok(())
+}
+
+#[tauri::command]
+pub async fn app_help_text() -> Result<String, String> {
+  Ok(APP_HELP_TEXT.to_string())
 }
 
 #[tauri::command]
@@ -2100,6 +2106,12 @@ mod tests {
     assert!(!is_strict_https_url("http://example.com/release"));
     assert!(!is_strict_https_url("https://"));
     assert!(!is_strict_https_url("file:///tmp/x"));
+  }
+
+  #[test]
+  fn app_help_text_contains_main_sections() {
+    assert!(APP_HELP_TEXT.contains("CloudTG: справка"));
+    assert!(APP_HELP_TEXT.contains("Навигация"));
   }
 
   #[test]

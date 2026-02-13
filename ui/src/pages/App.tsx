@@ -21,6 +21,210 @@ type AppUpdateInfo = {
   release_url: string | null;
 };
 
+type HelpBlock =
+  | { type: "heading"; level: 1 | 2 | 3; text: string }
+  | { type: "paragraph"; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "code"; text: string };
+
+function parseHelpMarkdown(text: string): HelpBlock[] {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const blocks: HelpBlock[] = [];
+
+  let paragraphLines: string[] = [];
+  let listType: null | "ul" | "ol" = null;
+  let listItems: string[] = [];
+  let inCode = false;
+  let codeLines: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) return;
+    blocks.push({ type: "paragraph", text: paragraphLines.join(" ").trim() });
+    paragraphLines = [];
+  };
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) return;
+    blocks.push({ type: "list", ordered: listType === "ol", items: [...listItems] });
+    listType = null;
+    listItems = [];
+  };
+
+  const flushCode = () => {
+    if (codeLines.length === 0) return;
+    blocks.push({ type: "code", text: codeLines.join("\n") });
+    codeLines = [];
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("```")) {
+      if (inCode) {
+        flushCode();
+        inCode = false;
+      } else {
+        flushParagraph();
+        flushList();
+        inCode = true;
+      }
+      continue;
+    }
+
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      const level = headingMatch[1].length as 1 | 2 | 3;
+      blocks.push({ type: "heading", level, text: headingMatch[2].trim() });
+      continue;
+    }
+
+    const ulMatch = line.match(/^\s*-\s+(.+)$/);
+    if (ulMatch) {
+      flushParagraph();
+      if (listType !== "ul") {
+        flushList();
+        listType = "ul";
+      }
+      listItems.push(ulMatch[1].trim());
+      continue;
+    }
+
+    const olMatch = line.match(/^\s*\d+\.\s+(.+)$/);
+    if (olMatch) {
+      flushParagraph();
+      if (listType !== "ol") {
+        flushList();
+        listType = "ol";
+      }
+      listItems.push(olMatch[1].trim());
+      continue;
+    }
+
+    flushList();
+    paragraphLines.push(trimmed);
+  }
+
+  if (inCode) {
+    flushCode();
+  }
+  flushParagraph();
+  flushList();
+
+  return blocks;
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const tokenRegex = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  let index = 0;
+
+  while ((match = tokenRegex.exec(text)) !== null) {
+    const token = match[0];
+    const start = match.index;
+    if (start > last) {
+      nodes.push(text.slice(last, start));
+    }
+    if (token.startsWith("`")) {
+      nodes.push(
+        <code key={`${keyPrefix}-code-${index}`} className="help-md-inline-code">
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith("**")) {
+      nodes.push(
+        <strong key={`${keyPrefix}-strong-${index}`} className="help-md-strong">
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else {
+      nodes.push(token);
+    }
+    last = start + token.length;
+    index += 1;
+  }
+
+  if (last < text.length) {
+    nodes.push(text.slice(last));
+  }
+
+  return nodes;
+}
+
+function renderHelpMarkdown(text: string): React.ReactNode {
+  const blocks = parseHelpMarkdown(text);
+
+  return (
+    <div className="help-md-root">
+      {blocks.map((block, index) => {
+        const key = `help-${index}`;
+        if (block.type === "heading") {
+          if (block.level === 1) {
+            return (
+              <h1 key={key} className="help-md-h1">
+                {renderInlineMarkdown(block.text, key)}
+              </h1>
+            );
+          }
+          if (block.level === 2) {
+            return (
+              <h2 key={key} className="help-md-h2">
+                {renderInlineMarkdown(block.text, key)}
+              </h2>
+            );
+          }
+          return (
+            <h3 key={key} className="help-md-h3">
+              {renderInlineMarkdown(block.text, key)}
+            </h3>
+          );
+        }
+
+        if (block.type === "paragraph") {
+          return (
+            <p key={key} className="help-md-p">
+              {renderInlineMarkdown(block.text, key)}
+            </p>
+          );
+        }
+
+        if (block.type === "code") {
+          return (
+            <pre key={key} className="help-md-pre">
+              <code>{block.text}</code>
+            </pre>
+          );
+        }
+
+        const ListTag = block.ordered ? "ol" : "ul";
+        return (
+          <ListTag key={key} className={block.ordered ? "help-md-ol" : "help-md-ul"}>
+            {block.items.map((item, itemIndex) => (
+              <li key={`${key}-${itemIndex}`} className="help-md-li">
+                {renderInlineMarkdown(item, `${key}-${itemIndex}`)}
+              </li>
+            ))}
+          </ListTag>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function App() {
   const {
     auth,
@@ -43,6 +247,9 @@ export default function App() {
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [helpBusy, setHelpBusy] = useState(false);
+  const [helpText, setHelpText] = useState("");
   const syncStartedRef = useRef(false);
   const progressValue =
     tdlibBuild.progress === null ? null : Math.max(0, Math.min(100, tdlibBuild.progress));
@@ -70,6 +277,20 @@ export default function App() {
       setLogoutBusy(false);
     }
   }, [refreshAuth, refreshSettings, setError, setTgSync]);
+  const handleOpenHelp = useCallback(async () => {
+    try {
+      setHelpBusy(true);
+      if (!helpText.trim()) {
+        const text = await invokeSafe<string>("app_help_text");
+        setHelpText(text);
+      }
+      setShowHelp(true);
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setHelpBusy(false);
+    }
+  }, [helpText, setError]);
 
   useEffect(() => {
     const disposedRef = { current: false };
@@ -196,7 +417,65 @@ export default function App() {
       style={{ fontFamily: "system-ui, sans-serif", padding: 16, maxWidth: 1100, margin: "0 auto" }}
     >
       <style>
-        {`@keyframes tgSyncMove { 0% { transform: translateX(-60%); } 50% { transform: translateX(60%); } 100% { transform: translateX(120%); } }`}
+        {`
+          @keyframes tgSyncMove {
+            0% { transform: translateX(-60%); }
+            50% { transform: translateX(60%); }
+            100% { transform: translateX(120%); }
+          }
+          .help-md-root {
+            color: #111827;
+            font-size: 14px;
+            line-height: 1.6;
+          }
+          .help-md-h1 {
+            margin: 0 0 14px;
+            font-size: 25px;
+            line-height: 1.25;
+          }
+          .help-md-h2 {
+            margin: 18px 0 10px;
+            font-size: 19px;
+            line-height: 1.3;
+          }
+          .help-md-h3 {
+            margin: 14px 0 8px;
+            font-size: 16px;
+            line-height: 1.35;
+          }
+          .help-md-p {
+            margin: 8px 0;
+          }
+          .help-md-ul, .help-md-ol {
+            margin: 8px 0;
+            padding-left: 22px;
+          }
+          .help-md-li {
+            margin: 4px 0;
+          }
+          .help-md-inline-code {
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 1px 6px;
+            font-size: 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          }
+          .help-md-strong {
+            font-weight: 650;
+          }
+          .help-md-pre {
+            margin: 10px 0;
+            border-radius: 10px;
+            border: 1px solid #dbe3f0;
+            background: #0f172a;
+            color: #e5e7eb;
+            padding: 12px;
+            overflow: auto;
+            font-size: 12px;
+            line-height: 1.45;
+          }
+        `}
       </style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
@@ -204,6 +483,15 @@ export default function App() {
           {appVersion ? <div style={{ fontSize: 12, opacity: 0.65 }}>v{appVersion}</div> : null}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <button
+            onClick={() => {
+              void handleOpenHelp();
+            }}
+            disabled={helpBusy}
+            style={{ padding: "8px 12px", borderRadius: 10, opacity: helpBusy ? 0.7 : 1, cursor: helpBusy ? "wait" : "pointer" }}
+          >
+            {helpBusy ? "Загружаю..." : "Справка"}
+          </button>
           {auth === "ready" ? (
             <button
               onClick={handleLogout}
@@ -430,6 +718,60 @@ export default function App() {
       ) : (
         <FileManager tree={tree} />
       )}
+
+      {showHelp ? (
+        <div
+          onClick={() => setShowHelp(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 1000
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "min(980px, 100%)",
+              maxHeight: "min(85vh, 900px)",
+              borderRadius: 12,
+              border: "1px solid #d9d9d9",
+              background: "#fff",
+              boxShadow: "0 24px 80px rgba(0,0,0,0.24)",
+              display: "grid",
+              gridTemplateRows: "auto 1fr"
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: 12,
+                borderBottom: "1px solid #eee"
+              }}
+            >
+              <div>
+                <b>Справка</b>
+                <div style={{ marginTop: 2, fontSize: 12, opacity: 0.7 }}>
+                  Функционал и навигация по CloudTG
+                </div>
+              </div>
+              <button onClick={() => setShowHelp(false)} style={{ padding: "8px 12px", borderRadius: 10 }}>
+                Закрыть
+              </button>
+            </div>
+            <div style={{ padding: 14, overflow: "auto" }}>
+              {helpText.trim() ? renderHelpMarkdown(helpText) : "Справка пока недоступна."}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
